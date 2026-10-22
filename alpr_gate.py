@@ -1170,7 +1170,7 @@ def create_app(service: Service) -> FastAPI:
         finally:
             service.stop()
 
-    app = FastAPI(title="ALPR Gate", lifespan=lifespan)
+    app = FastAPI(title="ALPR-123", lifespan=lifespan)
     app.state.service = service
     if ASSET_DIR.is_dir():
         app.mount("/assets", StaticFiles(directory=ASSET_DIR), name="assets")

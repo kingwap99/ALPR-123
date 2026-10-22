@@ -1,5 +1,5 @@
 [Unit]
-Description=ALPR Gate license plate recognition service
+Description=ALPR-123 license plate recognition service
 After=network-online.target
 Wants=network-online.target
 

@@ -1,6 +1,6 @@
 # Installation
 
-This guide installs ALPR Gate next to an existing `go2rtc` instance and connects it to Home Assistant. Replace `ALPR_HOST`, `GO2RTC_HOST`, `HOME_ASSISTANT_HOST`, stream names, and entity IDs with your own values.
+This guide installs ALPR-123 next to an existing `go2rtc` instance and connects it to Home Assistant. Replace `ALPR_HOST`, `GO2RTC_HOST`, `HOME_ASSISTANT_HOST`, stream names, and entity IDs with your own values.
 
 ## 1. Prepare the camera streams
 
@@ -119,7 +119,7 @@ The first frame can take 10–30 seconds because ffmpeg waits for a keyframe. Th
 
 Copy `custom_components/alpr_gate` into the Home Assistant `config` directory, then restart Home Assistant.
 
-Open **Settings → Devices & Services → Add Integration → ALPR Gate** and enter the ALPR host and port. The integration:
+Open **Settings → Devices & Services → Add Integration → ALPR-123** and enter the ALPR host and port. The integration:
 
 - creates sensors for last plate, last event, last seen, events today, camera, and confidence;
 - creates camera/service online binary sensors;
@@ -128,7 +128,7 @@ Open **Settings → Devices & Services → Add Integration → ALPR Gate** and e
 
 Use `examples/home_assistant/integration_automation.yaml` as the event-triggered automation. No manual webhook ID or helper setup is required for the native integration.
 
-If you use HACS, add this repository as a custom **Integration** repository and install **ALPR Gate** from HACS.
+If you use HACS, add this repository as a custom **Integration** repository and install **ALPR-123** from HACS.
 
 ## 6. Optional webhook automation
 

@@ -1,4 +1,4 @@
-"""Config flow for ALPR Gate."""
+"""Config flow for ALPR-123."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 
-from .const import DEFAULT_PORT, DOMAIN
+from .const import DEFAULT_PORT, DOMAIN, INTEGRATION_NAME
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class AlprGateConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Add an ALPR Gate service to Home Assistant."""
+    """Add an ALPR-123 service to Home Assistant."""
 
     VERSION = 1
 
@@ -56,7 +56,7 @@ class AlprGateConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 except (aiohttp.ClientError, TimeoutError, NoURLAvailableError):
                     webhook_enabled = False
                 return self.async_create_entry(
-                    title=f"ALPR Gate ({host})",
+                    title=f"{INTEGRATION_NAME} ({host})",
                     data={
                         "host": host,
                         "port": port,

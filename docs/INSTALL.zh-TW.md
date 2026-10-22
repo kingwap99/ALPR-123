@@ -115,7 +115,7 @@ venv/bin/python alpr_gate.py --config config.yaml --dry-run
 
 把 `custom_components/alpr_gate` 複製到 Home Assistant 的 `config` 目錄，重新啟動 HA。
 
-到 **設定 → 裝置與服務 → 新增整合 → ALPR Gate**，輸入 ALPR 主機與連接埠。整合會建立：
+到 **設定 → 裝置與服務 → 新增整合 → ALPR-123**，輸入 ALPR 主機與連接埠。整合會建立：
 
 - 最後車牌、最後事件、最後時間、今日事件數、鏡頭、信心值 sensor
 - 鏡頭／服務 online binary sensor
@@ -125,7 +125,7 @@ venv/bin/python alpr_gate.py --config config.yaml --dry-run
 
 可以使用 `examples/home_assistant/integration_automation.yaml` 的事件觸發 automation，不需要手動建立 webhook ID 或 helper。
 
-若使用 HACS，把這個 repo 加入 custom **Integration** repository，再從 HACS 安裝 **ALPR Gate**。
+若使用 HACS，把這個 repo 加入 custom **Integration** repository，再從 HACS 安裝 **ALPR-123**。
 
 ## 6. 可選的 webhook automation
 

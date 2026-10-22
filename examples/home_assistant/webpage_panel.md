@@ -1,4 +1,4 @@
-# Add ALPR Gate to the Home Assistant sidebar
+# Add ALPR-123 to the Home Assistant sidebar
 
 1. Open **Settings → Dashboards**.
 2. Choose **Add dashboard**.

@@ -1,4 +1,4 @@
-"""ALPR Gate integration."""
+"""ALPR-123 integration."""
 
 from __future__ import annotations
 
@@ -11,13 +11,19 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN, PLATFORMS
+from .const import DOMAIN, INTEGRATION_NAME, PLATFORMS
 from .coordinator import AlprGateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    host = entry.data.get("host")
+    if host and entry.title != f"{INTEGRATION_NAME} ({host})":
+        hass.config_entries.async_update_entry(
+            entry, title=f"{INTEGRATION_NAME} ({host})"
+        )
+
     coordinator = AlprGateCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
@@ -45,7 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             entry.async_on_unload(lambda: webhook.async_unregister(hass, webhook_id))
         except Exception as err:
-            _LOGGER.warning("Could not register ALPR Gate webhook: %s", err)
+            _LOGGER.warning("Could not register ALPR-123 webhook: %s", err)
     return True
 
 

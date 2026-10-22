@@ -1,8 +1,8 @@
-# Triggered by the native ALPR Gate integration.
+# Triggered by the native ALPR-123 integration.
 # Replace the plate and entity IDs before saving.
 
 - id: alpr_gate_integration_event
-  alias: ALPR Gate integration event
+  alias: ALPR-123 integration event
   triggers:
     - trigger: event
       event_type: alpr_gate_event

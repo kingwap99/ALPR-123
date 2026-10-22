@@ -1,4 +1,4 @@
-# ALPR Gate configuration.
+# ALPR-123 configuration.
 # Copy this file to config.yaml and replace every placeholder.
 
 camera:

@@ -1,4 +1,4 @@
-"""Binary sensors for ALPR Gate."""
+"""Binary sensors for ALPR-123."""
 
 from __future__ import annotations
 

@@ -1,11 +1,11 @@
-"""Shared entities for ALPR Gate."""
+"""Shared entities for ALPR-123."""
 
 from __future__ import annotations
 
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, INTEGRATION_NAME
 from .coordinator import AlprGateCoordinator
 
 
@@ -19,10 +19,10 @@ class AlprGateEntity(CoordinatorEntity[AlprGateCoordinator]):
         self.entry = entry
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
-            name="ALPR Gate",
-            manufacturer="ALPR Gate",
+            name=INTEGRATION_NAME,
+            manufacturer=INTEGRATION_NAME,
             model="Local ALPR service",
-            sw_version="0.2.0",
+            sw_version="0.3.0",
             configuration_url=f"http://{coordinator.host}:{coordinator.port}/",
         )
 

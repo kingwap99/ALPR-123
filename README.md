@@ -1,6 +1,6 @@
-# ALPR Gate
+# ALPR-123
 
-<p align="center"><img src="assets/icon-256.png" width="144" alt="ALPR Gate icon"></p>
+<p align="center"><img src="assets/icon-256.png" width="144" alt="ALPR-123 icon"></p>
 
 A small, self-hosted license plate recognition service for a fixed camera. It is designed for Home Assistant automations such as opening a garage door when a known vehicle arrives.
 
@@ -8,7 +8,7 @@ A small, self-hosted license plate recognition service for a fixed camera. It is
 
 ## Why this exists
 
-Running a full ALPR model against every frame of a 15 fps camera is wasteful on a small host. ALPR Gate uses a vehicle-first pipeline at 2 fps, a motion gate, optional per-camera ROI, multi-frame plate voting, and a tracked gate line. It then sends one small JSON event to Home Assistant over a webhook.
+Running a full ALPR model against every frame of a 15 fps camera is wasteful on a small host. ALPR-123 uses a vehicle-first pipeline at 2 fps, a motion gate, optional per-camera ROI, multi-frame plate voting, and a tracked gate line. It then sends one small JSON event to Home Assistant over a webhook.
 
 The project does not require MQTT, an HA add-on, or a cloud service.
 
@@ -107,7 +107,7 @@ See `config.example.yaml` for all fields.
 
 ### Native integration (recommended)
 
-Copy `custom_components/alpr_gate` into the Home Assistant configuration directory, restart HA, then open **Settings → Devices & Services → Add Integration → ALPR Gate** and enter the ALPR host and port (default `8099`).
+Copy `custom_components/alpr_gate` into the Home Assistant configuration directory, restart HA, then open **Settings → Devices & Services → Add Integration → ALPR-123** and enter the ALPR host and port (default `8099`).
 
 The integration creates last-plate, last-event, last-seen, events-today, camera, confidence, camera-online, and service-online entities. It fires `alpr_gate_event` with `direction`, `plate`, `plate_normalized`, `confidence`, `camera`, `snapshot`, and `seen_at`. When Home Assistant has an internal URL, the integration also registers its webhook with the ALPR service automatically; otherwise it polls status/history every five seconds.
 

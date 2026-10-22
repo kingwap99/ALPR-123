@@ -1,4 +1,4 @@
-"""Coordinator for the ALPR Gate local service."""
+"""Coordinator for the ALPR-123 local service."""
 
 from __future__ import annotations
 

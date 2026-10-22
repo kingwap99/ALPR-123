@@ -8,7 +8,7 @@ streams:
   driveway:
     - rtsp://USER:PASSWORD@CAMERA_IP:554/stream1
 
-  # Low-rate streams consumed by ALPR Gate.
+  # Low-rate streams consumed by ALPR-123.
   garage_alpr:
     - ffmpeg:garage#video=h264#hardware=videotoolbox#raw=-r 2 -g 4 -bf 0 -vf hwdownload,format=nv12,scale=960:960
   driveway_alpr:
