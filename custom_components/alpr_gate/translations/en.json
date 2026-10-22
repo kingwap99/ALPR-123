@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ALPR Gate",
+        "description": "Connect to the ALPR Gate service on your local network.",
+        "data": { "host": "Host", "port": "Port" }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the ALPR Gate service.",
+      "invalid_host": "Enter a valid host."
+    },
+    "abort": { "already_configured": "This ALPR Gate service is already configured." }
+  }
+}

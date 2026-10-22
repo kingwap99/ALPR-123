@@ -1,0 +1,52 @@
+# Triggered by the native ALPR Gate integration.
+# Replace the plate and entity IDs before saving.
+
+- id: alpr_gate_integration_event
+  alias: ALPR Gate integration event
+  triggers:
+    - trigger: event
+      event_type: alpr_gate_event
+  variables:
+    plate: "{{ trigger.event.data.plate_normalized | default('') }}"
+    direction: "{{ trigger.event.data.direction | default('') }}"
+    camera: "{{ trigger.event.data.camera | default('') }}"
+  conditions:
+    - condition: template
+      value_template: "{{ plate in ['AB1234'] }}"
+    - condition: template
+      value_template: "{{ direction in ['enter', 'exit'] }}"
+  actions:
+    # The integration already updates sensor.alpr_gate_last_plate and
+    # sensor.alpr_gate_last_event, so only physical actions are needed here.
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ direction == 'enter' and camera == 'driveway' }}"
+            - condition: state
+              entity_id: binary_sensor.garage_door_contact
+              state: "off"
+          sequence:
+            - action: switch.turn_on
+              target:
+                entity_id: switch.garage_door_up
+            - delay:
+                seconds: 1
+            - action: switch.turn_off
+              target:
+                entity_id: switch.garage_door_up
+        - conditions:
+            - condition: template
+              value_template: "{{ direction == 'enter' }}"
+          sequence:
+            - action: switch.turn_on
+              target:
+                entity_id: switch.outside_light
+        - conditions:
+            - condition: template
+              value_template: "{{ direction == 'exit' }}"
+          sequence:
+            - action: switch.turn_off
+              target:
+                entity_id: switch.outside_light
+  mode: queued
+  max: 10

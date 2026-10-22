@@ -738,6 +738,13 @@ class Service:
         self.snapshot_dir = self.data_dir / "snapshots"
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self.store = Store(self.data_dir / "events.db")
+        self.integration_path = self.data_dir / "integration.json"
+        self.webhook_url = ""
+        try:
+            integration = json.loads(self.integration_path.read_text())
+            self.webhook_url = str(integration.get("webhook_url") or "")
+        except Exception:
+            pass
         self.roi_path = self.data_dir / "roi.json"
         try:
             roi_state = json.loads(self.roi_path.read_text())
@@ -1082,7 +1089,8 @@ class Service:
             return None
 
     def _post_webhook(self, payload: dict[str, Any]) -> None:
-        if self.dry_run or not self.cfg.ha.webhook_url:
+        webhook_url = self.webhook_url or self.cfg.ha.webhook_url
+        if self.dry_run or not webhook_url:
             LOG.info("webhook dry-run: %s", json.dumps(payload, ensure_ascii=False))
             return
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1090,7 +1098,7 @@ class Service:
         for attempt in range(1, self.cfg.ha.retries + 1):
             try:
                 req = urllib.request.Request(
-                    self.cfg.ha.webhook_url,
+                    webhook_url,
                     data=body,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -1107,6 +1115,13 @@ class Service:
             LOG.warning("webhook attempt %s failed: %s", attempt, last_error)
             time.sleep(0.5 * attempt)
         LOG.error("webhook failed after %s attempts: %s", self.cfg.ha.retries, last_error)
+
+    def set_webhook_url(self, url: str) -> None:
+        self.webhook_url = url.strip()
+        try:
+            self.integration_path.write_text(json.dumps({"webhook_url": self.webhook_url}))
+        except Exception as exc:
+            LOG.warning("could not persist integration webhook: %s", exc)
 
     def _prune(self) -> None:
         try:
@@ -1207,6 +1222,18 @@ def create_app(service: Service) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid roi")
         svc.set_roi(camera_id, roi)
         return svc.cameras_info()
+
+    @app.post("/api/integration/webhook")
+    def set_integration_webhook(payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        svc.set_webhook_url(str(payload.get("url") or ""))
+        return {"ok": True, "configured": bool(svc.webhook_url)}
+
+    @app.delete("/api/integration/webhook")
+    def clear_integration_webhook(request: Request):
+        svc: Service = request.app.state.service
+        svc.set_webhook_url("")
+        return {"ok": True, "configured": False}
 
     @app.get("/api/events")
     async def events(

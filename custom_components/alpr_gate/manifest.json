@@ -1,0 +1,11 @@
+{
+  "domain": "alpr_gate",
+  "name": "ALPR Gate",
+  "version": "0.2.0",
+  "documentation": "https://github.com/kingwap99/ha-alpr-gate",
+  "issue_tracker": "https://github.com/kingwap99/ha-alpr-gate/issues",
+  "codeowners": ["@kingwap99"],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "requirements": []
+}

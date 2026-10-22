@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ALPR Gate",
+        "description": "連線到區域網路上的 ALPR Gate 服務。",
+        "data": { "host": "主機", "port": "連接埠" }
+      }
+    },
+    "error": {
+      "cannot_connect": "無法連線到 ALPR Gate 服務。",
+      "invalid_host": "請輸入有效的主機位址。"
+    },
+    "abort": { "already_configured": "這個 ALPR Gate 服務已經設定過了。" }
+  }
+}

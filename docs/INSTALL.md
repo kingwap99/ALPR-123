@@ -115,7 +115,22 @@ Open `http://ALPR_HOST:8099/` and check:
 
 The first frame can take 10–30 seconds because ffmpeg waits for a keyframe. The health endpoint returns 503 until the first frame arrives.
 
-## 5. Home Assistant webhook
+## 5. Home Assistant native integration
+
+Copy `custom_components/alpr_gate` into the Home Assistant `config` directory, then restart Home Assistant.
+
+Open **Settings → Devices & Services → Add Integration → ALPR Gate** and enter the ALPR host and port. The integration:
+
+- creates sensors for last plate, last event, last seen, events today, camera, and confidence;
+- creates camera/service online binary sensors;
+- fires `alpr_gate_event` for automations;
+- registers its webhook with the ALPR service automatically when HA has an internal URL; otherwise it polls every five seconds.
+
+Use `examples/home_assistant/integration_automation.yaml` as the event-triggered automation. No manual webhook ID or helper setup is required for the native integration.
+
+If you use HACS, add this repository as a custom **Integration** repository and install **ALPR Gate** from HACS.
+
+## 6. Optional webhook automation
 
 Create a random webhook ID and add the automation from `examples/home_assistant/automation.yaml`. Replace:
 
@@ -146,13 +161,13 @@ The automation uses `local_only: true`. Keep the service and HA on the same trus
 
 The iframe works on a local HTTP HA session. A remote HTTPS HA session may block an HTTP iframe; open the ALPR URL directly in that case.
 
-## 6. Camera selection and ROI
+## 7. Camera selection and ROI
 
 Choose a camera in the UI; it switches immediately. The selection changes the ALPR source and the live view, is persisted in `active_camera.json`, and survives a restart. Programmatic selector updates during page load are ignored, so reloading the page does not send a switch request.
 
 Use a test camera with a known parked car to validate plate recognition and the webhook first. Switch to the production camera only when the line, direction, and ROI are correct. Opening a garage door is a physical action; test it with the door in view and a manual stop available.
 
-## 7. Service management
+## 8. Service management
 
 macOS:
 
@@ -168,7 +183,7 @@ sudo systemctl restart alpr-gate
 sudo journalctl -u alpr-gate -f
 ```
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 - **503 on `/health`**: no frame yet, wrong RTSP credentials, or ffmpeg cannot reach go2rtc.
 - **UI live view works but ALPR has no frames**: the ALPR stream and live stream are different; check `cameras.*.rtsp_url`.

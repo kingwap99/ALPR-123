@@ -111,7 +111,23 @@ venv/bin/python alpr_gate.py --config config.yaml --dry-run
 
 第一個畫面可能要等 10–30 秒，因為 ffmpeg 在等 keyframe；這段時間 `/health` 會回 503。
 
-## 5. 接上 Home Assistant
+## 5. 使用 Home Assistant 原生整合
+
+把 `custom_components/alpr_gate` 複製到 Home Assistant 的 `config` 目錄，重新啟動 HA。
+
+到 **設定 → 裝置與服務 → 新增整合 → ALPR Gate**，輸入 ALPR 主機與連接埠。整合會建立：
+
+- 最後車牌、最後事件、最後時間、今日事件數、鏡頭、信心值 sensor
+- 鏡頭／服務 online binary sensor
+- `alpr_gate_event` 事件供 automation 觸發
+
+如果 HA 有內部 URL，整合會自動把 webhook 註冊到 ALPR 服務；沒有內部 URL 時改用每 5 秒 polling。
+
+可以使用 `examples/home_assistant/integration_automation.yaml` 的事件觸發 automation，不需要手動建立 webhook ID 或 helper。
+
+若使用 HACS，把這個 repo 加入 custom **Integration** repository，再從 HACS 安裝 **ALPR Gate**。
+
+## 6. 可選的 webhook automation
 
 建立一個隨機 webhook ID，把 `examples/home_assistant/automation.yaml` 的內容貼到 HA automation，替換：
 
@@ -142,7 +158,7 @@ automation 使用 `local_only: true`。ALPR 服務與 HA 應在同一個受信�
 
 本機 HTTP 的 HA 可以正常嵌入；若你從外網 HTTPS 開 HA，瀏覽器可能阻擋 HTTP iframe，這時直接開 ALPR 網址。
 
-## 6. 切換鏡頭與 ROI
+## 7. 切換鏡頭與 ROI
 
 UI 的「監測鏡頭」選好就直接切換。頁面載入時程式更新選單不會送出切換 request，所以重新整理不會亂跳。切換後 ALPR 來源與即時畫面一起換，選擇存在 `active_camera.json`，重啟後保留。
 
@@ -150,7 +166,7 @@ UI 的「監測鏡頭」選好就直接切換。頁面載入時程式更新選�
 
 開車庫門是實體動作。請先確認判斷線、`enter_direction`、ROI 都正確，並且人在現場、可隨時停止，再做第一次自動開門測試。
 
-## 7. 服務管理
+## 8. 服務管理
 
 macOS：
 
@@ -166,7 +182,7 @@ sudo systemctl restart alpr-gate
 sudo journalctl -u alpr-gate -f
 ```
 
-## 8. 常見問題
+## 9. 常見問題
 
 - **`/health` 回 503**：還沒收到第一個畫面、RTSP 帳密錯誤，或 ffmpeg 連不到 go2rtc。
 - **即時畫面正常但 ALPR 沒畫面**：即時與 ALPR 是不同串流，檢查 `cameras.*.rtsp_url`。

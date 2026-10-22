@@ -23,6 +23,7 @@ The project does not require MQTT, an HA add-on, or a cloud service.
 - Each saved snapshot draws a small reference plate using the bundled TW Plate Sans font, so the OCR result can be compared with the official plate lettering.
 - Built-in web UI: live camera, last event, searchable history, image modal, and ROI editor.
 - Home Assistant webhook integration with a sample automation, helpers, and webpage panel.
+- Native Home Assistant custom integration with config flow, sensors, health entities, and an `alpr_gate_event` bus event.
 - launchd template for macOS and systemd template for Linux.
 
 ## Typography
@@ -104,7 +105,17 @@ See `config.example.yaml` for all fields.
 
 ## Home Assistant
 
-The recommended integration is a webhook trigger plus helpers:
+### Native integration (recommended)
+
+Copy `custom_components/alpr_gate` into the Home Assistant configuration directory, restart HA, then open **Settings → Devices & Services → Add Integration → ALPR Gate** and enter the ALPR host and port (default `8099`).
+
+The integration creates last-plate, last-event, last-seen, events-today, camera, confidence, camera-online, and service-online entities. It fires `alpr_gate_event` with `direction`, `plate`, `plate_normalized`, `confidence`, `camera`, `snapshot`, and `seen_at`. When Home Assistant has an internal URL, the integration also registers its webhook with the ALPR service automatically; otherwise it polls status/history every five seconds.
+
+Use `examples/home_assistant/integration_automation.yaml` for an event-triggered automation.
+
+### Webhook automation (optional)
+
+The older webhook trigger plus helpers remains supported:
 
 1. Create a long random webhook ID in Home Assistant.
 2. Add the automation in `examples/home_assistant/automation.yaml`.
@@ -128,6 +139,8 @@ An optional `panel_iframe` snippet is included in `examples/home_assistant/panel
 | GET | `/api/cameras` | Camera list and active camera |
 | POST | `/api/cameras/{id}` | Switch active camera |
 | POST | `/api/cameras/{id}/roi` | Set or clear a normalized ROI |
+| POST | `/api/integration/webhook` | Register the HA integration webhook |
+| DELETE | `/api/integration/webhook` | Clear the HA integration webhook |
 | GET | `/snapshots/{name}` | Event JPEG |
 | GET | `/last.jpg` | Last saved event JPEG |
 
@@ -161,6 +174,7 @@ scripts/                     macOS installer
 assets/                     icon, icon SVG, and the TW Plate Sans family
 examples/go2rtc.yaml         go2rtc stream examples
 examples/home_assistant/     webhook automation, helpers, panel notes
+custom_components/alpr_gate/ native Home Assistant integration
 docs/                        installation, architecture, API
 ```
 
