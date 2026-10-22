@@ -146,7 +146,7 @@ The iframe works on a local HTTP HA session. A remote HTTPS HA session may block
 
 ## 6. Camera selection and ROI
 
-The camera selector in the UI changes the ALPR source and the live view. The selection is persisted in `active_camera.json` and survives a restart.
+Choose a camera in the UI and press **Apply**. The selection changes the ALPR source and the live view, is persisted in `active_camera.json`, and survives a restart. Merely reloading the page does not send a switch request.
 
 Use a test camera with a known parked car to validate plate recognition and the webhook first. Switch to the production camera only when the line, direction, and ROI are correct. Opening a garage door is a physical action; test it with the door in view and a manual stop available.
 

@@ -103,6 +103,7 @@
       <div class="head-right">
         <button class="btn" id="roiBtn">偵測範圍</button>
         <div class="cam-picker"><span>監測鏡頭</span><select id="cameraSelect" aria-label="監測鏡頭"></select></div>
+        <button class="btn" id="cameraApply" disabled>套用</button>
         <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">連線中…</span></div>
       </div>
     </header>
@@ -186,6 +187,7 @@
         state.cameras = d.cameras || [];
         activeCamera = d.active;
         $('cameraSelect').innerHTML = (d.cameras || []).map((c) => `<option value="${esc(c.id)}"${c.id === d.active ? ' selected' : ''}>${esc(c.label)}</option>`).join('');
+        $('cameraApply').disabled = true;
         const current = (d.cameras || []).find((c) => c.id === d.active);
         if (current) { setLive(current.live_url); setCameraLabel(current.label); }
       } catch (e) { /* status banner covers failures */ }
@@ -286,11 +288,17 @@
     $('q').addEventListener('input', () => { clearTimeout(window._q); window._q = setTimeout(loadEvents, 250); });
     $('direction').onchange = loadEvents;
     $('day').onchange = loadEvents;
-    $('cameraSelect').onchange = async () => {
+    $('cameraSelect').onchange = () => {
+      const select = $('cameraSelect');
+      const id = select.value;
+      $('cameraApply').disabled = !id || id === activeCamera;
+    };
+    $('cameraApply').onclick = async () => {
       const select = $('cameraSelect');
       const id = select.value;
       if (!id || id === activeCamera) return;
       select.disabled = true;
+      $('cameraApply').disabled = true;
       try {
         const r = await fetch('/api/cameras/' + encodeURIComponent(id), { method: 'POST' });
         if (!r.ok) throw new Error('switch failed');
@@ -304,6 +312,7 @@
         $('statusText').textContent = '切換失敗';
       } finally {
         select.disabled = false;
+        $('cameraApply').disabled = true;
       }
     };
 

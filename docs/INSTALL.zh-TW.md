@@ -144,7 +144,7 @@ automation 使用 `local_only: true`。ALPR 服務與 HA 應在同一個受信�
 
 ## 6. 切換鏡頭與 ROI
 
-UI 的「監測鏡頭」會同時切換 ALPR 來源與即時畫面，選擇會存在 `active_camera.json`，重啟後保留。
+UI 的「監測鏡頭」選好後要按 **套用** 才會切換；這可避免重新整理頁面時誤送切換 request。切換後 ALPR 來源與即時畫面一起換，選擇存在 `active_camera.json`，重啟後保留。
 
 建議先用有固定停車的測試鏡頭驗證車牌與 webhook，再切到正式鏡頭。切換後約需 10–30 秒重新連線。
 
