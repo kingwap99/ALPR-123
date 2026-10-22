@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>車牌辨識</title>
+  <style>
+    :root {
+      --bg: #0a1020;
+      --panel: #131b2e;
+      --panel-2: #182238;
+      --line: #28344d;
+      --text: #eaf0ff;
+      --muted: #91a1bf;
+      --enter: #55d6b0;
+      --exit: #ffb45e;
+      --accent: #6aa9ff;
+      --test: #b08cff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 15% -10%, #172844 0, var(--bg) 48%, #070b14 100%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+      min-height: 100vh;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    .wrap { max-width: 1380px; margin: 0 auto; padding: 26px 22px 60px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+    h1 { font-size: 26px; margin: 0; letter-spacing: .02em; }
+    .sub { color: var(--muted); font-size: 13px; margin-top: 5px; }
+    .head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+    .cam-picker { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px; font-size: 12px; color: var(--muted); }
+    .cam-picker select { background: transparent; color: var(--text); border: 0; font: inherit; font-size: 13px; outline: none; cursor: pointer; max-width: 190px; }
+    .cam-picker select option { background: var(--panel); color: var(--text); }
+    .roi-stage { position: relative; margin: 14px; background: #05080f; overflow: hidden; touch-action: none; }
+    .roi-stage img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
+    .roi-rect { position: absolute; display: none; border: 2px solid var(--accent); background: rgba(106,169,255,.16); box-shadow: 0 0 0 9999px rgba(2,5,10,.5); pointer-events: none; }
+    .roi-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px 16px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+    .roi-actions .buttons { display: flex; gap: 8px; }
+    .status { display: flex; align-items: center; gap: 9px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 9px 14px; font-size: 13px; white-space: nowrap; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #6b7890; box-shadow: 0 0 0 4px rgba(107,120,144,.12); }
+    .dot.ok { background: var(--enter); box-shadow: 0 0 0 4px rgba(85,214,176,.14); }
+    .dot.bad { background: #ff6b6b; box-shadow: 0 0 0 4px rgba(255,107,107,.14); }
+    .top { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(310px, .55fr); gap: 18px; align-items: stretch; }
+    .card { background: linear-gradient(180deg, rgba(255,255,255,.025), transparent 65%), var(--panel); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.22); }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 15px 17px; border-bottom: 1px solid var(--line); }
+    .card-head h2 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .02em; }
+    .card-head .hint { color: var(--muted); font-size: 12px; }
+    .live-frame { position: relative; background: #05080f; aspect-ratio: 16 / 10; min-height: 300px; }
+    .live-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .live-foot { padding: 10px 16px 14px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .last-card { display: flex; flex-direction: column; }
+    .last-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; height: 100%; }
+    .last-plate { font-size: 38px; font-weight: 800; letter-spacing: .08em; line-height: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+    .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 650; }
+    .badge.enter { background: rgba(85,214,176,.13); color: var(--enter); border: 1px solid rgba(85,214,176,.28); }
+    .badge.exit { background: rgba(255,180,94,.13); color: var(--exit); border: 1px solid rgba(255,180,94,.28); }
+    .badge.test { background: rgba(176,140,255,.13); color: var(--test); border: 1px solid rgba(176,140,255,.3); }
+    .last-img { border-radius: 12px; overflow: hidden; background: #05080f; border: 1px solid var(--line); }
+    .last-img img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; }
+    .muted { color: var(--muted); }
+    .history { margin-top: 18px; }
+    .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .filters input, .filters select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font: inherit; font-size: 13px; outline: none; }
+    .filters input:focus, .filters select:focus { border-color: var(--accent); }
+    .filters input[type="search"] { width: 170px; }
+    .btn { cursor: pointer; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; font: inherit; font-size: 13px; }
+    .btn:hover { border-color: var(--accent); }
+    .events { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 13px; padding: 16px; }
+    .event { text-align: left; background: var(--panel-2); border: 1px solid var(--line); border-radius: 13px; overflow: hidden; cursor: pointer; transition: transform .15s ease, border-color .15s ease; padding: 0; color: inherit; }
+    .event:hover { transform: translateY(-2px); border-color: #3f5172; }
+    .event img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: #05080f; }
+    .event-body { padding: 11px 12px 12px; }
+    .event-plate { font-size: 21px; font-weight: 750; letter-spacing: .06em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .event-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 7px; color: var(--muted); font-size: 12px; }
+    .empty { padding: 42px 18px; text-align: center; color: var(--muted); display: none; }
+    .modal { position: fixed; inset: 0; background: rgba(2,5,10,.82); backdrop-filter: blur(8px); display: none; align-items: center; justify-content: center; padding: 22px; z-index: 20; }
+    .modal.open { display: flex; }
+    .modal-box { width: min(900px, 100%); max-height: 92vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 30px 90px rgba(0,0,0,.55); }
+    .modal-box img { width: 100%; display: block; background: #05080f; }
+    .modal-info { padding: 16px 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+    .modal-info strong { font-size: 24px; letter-spacing: .06em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .modal-close { position: sticky; top: 10px; float: right; margin: 10px; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line); background: rgba(10,16,32,.8); color: var(--text); font-size: 20px; cursor: pointer; }
+    @media (max-width: 900px) {
+      .top { grid-template-columns: 1fr; }
+      .live-frame { aspect-ratio: 4 / 3; }
+      header { align-items: flex-start; flex-direction: column; }
+      .head-right { justify-content: flex-start; }
+      .filters input[type="search"] { width: 130px; }
+    }
+  </style>
+</head>
+<body data-live-url="__LIVE_URL__" data-camera-id="__CAMERA_ID__">
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>車牌辨識</h1>
+        <div class="sub">.22 · <span id="cameraLabel">__CAMERA_LABEL__</span> · 歷史截圖保留 7 天</div>
+      </div>
+      <div class="head-right">
+        <button class="btn" id="roiBtn">偵測範圍</button>
+        <div class="cam-picker"><span>監測鏡頭</span><select id="cameraSelect" aria-label="監測鏡頭"></select></div>
+        <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">連線中…</span></div>
+      </div>
+    </header>
+
+    <div class="top">
+      <section class="card">
+        <div class="card-head"><h2>即時畫面</h2><span class="hint" id="frameAge"></span></div>
+        <div class="live-frame"><iframe id="liveFrame" title="即時車庫畫面" allow="autoplay; fullscreen" referrerpolicy="no-referrer"></iframe></div>
+        <div class="live-foot"><span>ALPR 判斷用 2fps；這裡顯示 15fps 畫面。切換鏡頭後需 10–30 秒重新連線。</span><a id="liveLink" target="_blank" rel="noreferrer">另開 go2rtc</a></div>
+      </section>
+
+      <aside class="card last-card">
+        <div class="card-head"><h2>最後一次進出</h2><span class="hint" id="lastTime">—</span></div>
+        <div class="last-body" id="lastBody">
+          <div class="last-plate" id="lastPlate">—</div>
+          <div class="row" id="lastMeta"><span class="muted">尚無事件</span></div>
+          <div class="last-img"><img id="lastImage" alt="最後一次車牌截圖" style="display:none"></div>
+          <div class="muted" style="font-size:12px;line-height:1.6">車輛進入或離開車庫後，會在這裡出現車牌與截圖。<br>目前有事件時才會儲存圖片。</div>
+        </div>
+      </aside>
+    </div>
+
+    <section class="card history">
+      <div class="card-head">
+        <h2>歷史進出 <span class="muted" id="eventCount" style="font-weight:400;font-size:12px"></span></h2>
+        <div class="filters">
+          <input id="q" type="search" placeholder="搜尋車牌" autocomplete="off">
+          <select id="direction"><option value="">全部</option><option value="enter">進入</option><option value="exit">離開</option></select>
+          <input id="day" type="date">
+          <button class="btn" id="refresh">重新整理</button>
+        </div>
+      </div>
+      <div class="events" id="events"></div>
+      <div class="empty" id="empty">尚無進出紀錄。車輛經過並跨越判斷線後，會出現在這裡。</div>
+    </section>
+  </div>
+
+  <div class="modal" id="modal" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <button class="modal-close" id="modalClose" aria-label="關閉">×</button>
+      <img id="modalImage" alt="車牌截圖">
+      <div class="modal-info">
+        <div><strong id="modalPlate">—</strong><div class="row" id="modalMeta" style="margin-top:7px"></div></div>
+        <a id="modalRaw" target="_blank" rel="noreferrer">開啟原圖</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="roiModal" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <button class="modal-close" id="roiClose" aria-label="關閉">×</button>
+      <div class="roi-stage" id="roiStage"><img id="roiImage" alt="偵測範圍設定畫面" draggable="false"><div class="roi-rect" id="roiRect"></div></div>
+      <div class="roi-actions">
+        <span>在畫面上拖曳框選車牌可能出現的區域；框外不跑 motion / 車輛偵測。</span>
+        <div class="buttons"><button class="btn" id="roiClear">清除</button><button class="btn" id="roiSave">儲存</button></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = { events: [], last: null, cameras: [] };
+    let liveUrl = document.body.dataset.liveUrl;
+    let activeCamera = document.body.dataset.cameraId;
+
+    function setLive(url) {
+      if (!url) return;
+      liveUrl = url;
+      $('liveFrame').src = url;
+      $('liveLink').href = url;
+    }
+    function setCameraLabel(label) {
+      if (label) $('cameraLabel').textContent = label;
+    }
+    setLive(liveUrl);
+
+    async function loadCameras() {
+      try {
+        const r = await fetch('/api/cameras', { cache: 'no-store' });
+        const d = await r.json();
+        state.cameras = d.cameras || [];
+        $('cameraSelect').innerHTML = (d.cameras || []).map((c) => `<option value="${esc(c.id)}">${esc(c.label)}</option>`).join('');
+        $('cameraSelect').value = d.active;
+        activeCamera = d.active;
+        const current = (d.cameras || []).find((c) => c.id === d.active);
+        if (current) { setLive(current.live_url); setCameraLabel(current.label); }
+      } catch (e) { /* status banner covers failures */ }
+    }
+
+    function fmtTime(ts) {
+      if (!ts) return '—';
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return ts;
+      return d.toLocaleString('zh-TW', { hour12: false });
+    }
+
+    function esc(v) {
+      return String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function badge(direction, test) {
+      const d = direction === 'enter' ? '<span class="badge enter">進入</span>' : '<span class="badge exit">離開</span>';
+      return d + (test ? ' <span class="badge test">TEST</span>' : '');
+    }
+
+    async function refreshStatus() {
+      try {
+        const r = await fetch('/health', { cache: 'no-store' });
+        const d = await r.json();
+        const ok = r.ok && d.camera_ok;
+        $('statusDot').className = 'dot ' + (ok ? 'ok' : 'bad');
+        $('statusText').textContent = ok ? '服務正常' : (d.state === 'starting' ? '啟動中…' : '服務離線');
+        $('frameAge').textContent = d.last_frame_age == null ? '' : `最後畫面 ${d.last_frame_age}s 前`;
+      } catch (e) {
+        $('statusDot').className = 'dot bad';
+        $('statusText').textContent = '無法連線';
+      }
+    }
+
+    function renderLast(ev) {
+      if (!ev) return;
+      state.last = ev;
+      $('lastPlate').textContent = ev.plate || '—';
+      $('lastMeta').innerHTML = `${badge(ev.direction, ev.test)} <span>${esc(fmtTime(ev.ts))}</span> <span>信心 ${(Number(ev.confidence) * 100).toFixed(1)}%</span>`;
+      $('lastTime').textContent = fmtTime(ev.ts);
+      const img = $('lastImage');
+      if (ev.snapshot_url) { img.src = ev.snapshot_url; img.style.display = 'block'; img.onclick = () => openModal(ev); }
+      else { img.style.display = 'none'; }
+    }
+
+    function renderEvents(events, total) {
+      state.events = events;
+      $('eventCount').textContent = total ? `(${total})` : '';
+      const box = $('events');
+      box.innerHTML = '';
+      $('empty').style.display = events.length ? 'none' : 'block';
+      events.forEach((ev) => {
+        const el = document.createElement('button');
+        el.className = 'event';
+        el.type = 'button';
+        el.onclick = () => openModal(ev);
+        el.innerHTML = `
+          ${ev.snapshot_url ? `<img loading="lazy" src="${esc(ev.snapshot_url)}" alt="${esc(ev.plate)}">` : '<div style="aspect-ratio:4/3;background:#05080f"></div>'}
+          <div class="event-body">
+            <div class="event-plate">${esc(ev.plate)}</div>
+            <div class="event-meta"><span>${badge(ev.direction, ev.test)}</span><span>${esc(fmtTime(ev.ts))}</span></div>
+            <div class="event-meta"><span>信心 ${(Number(ev.confidence) * 100).toFixed(1)}%</span><span>#${ev.id}</span></div>
+          </div>`;
+        box.appendChild(el);
+      });
+    }
+
+    async function loadEvents() {
+      const params = new URLSearchParams({ limit: '100' });
+      const q = $('q').value.trim();
+      if (q) params.set('plate', q);
+      if ($('direction').value) params.set('direction', $('direction').value);
+      if ($('day').value) params.set('date', $('day').value);
+      try {
+        const r = await fetch('/api/events?' + params.toString(), { cache: 'no-store' });
+        const d = await r.json();
+        renderEvents(d.events || [], d.total || 0);
+        if ((d.events || []).length) renderLast(d.events[0]);
+      } catch (e) {
+        $('empty').style.display = 'block';
+        $('empty').textContent = '讀取歷史資料失敗，請確認服務是否正常。';
+      }
+    }
+
+    function openModal(ev) {
+      $('modalPlate').textContent = ev.plate || '—';
+      $('modalMeta').innerHTML = `${badge(ev.direction, ev.test)} <span>${esc(fmtTime(ev.ts))}</span> <span>信心 ${(Number(ev.confidence) * 100).toFixed(1)}%</span>`;
+      $('modalImage').src = ev.snapshot_url || '';
+      $('modalRaw').href = ev.snapshot_url || '#';
+      $('modal').classList.add('open');
+    }
+
+    $('modalClose').onclick = () => $('modal').classList.remove('open');
+    $('modal').onclick = (e) => { if (e.target === $('modal')) $('modal').classList.remove('open'); };
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('modal').classList.remove('open'); });
+    $('refresh').onclick = loadEvents;
+    $('q').addEventListener('input', () => { clearTimeout(window._q); window._q = setTimeout(loadEvents, 250); });
+    $('direction').onchange = loadEvents;
+    $('day').onchange = loadEvents;
+    $('cameraSelect').onchange = async () => {
+      const select = $('cameraSelect');
+      const id = select.value;
+      select.disabled = true;
+      try {
+        const r = await fetch('/api/cameras/' + encodeURIComponent(id), { method: 'POST' });
+        if (!r.ok) throw new Error('switch failed');
+        const d = await r.json();
+        activeCamera = d.active;
+        const current = (d.cameras || []).find((c) => c.id === d.active);
+        if (current) { setLive(current.live_url); setCameraLabel(current.label); }
+        $('statusText').textContent = '切換鏡頭中…';
+        setTimeout(refreshStatus, 1200);
+      } catch (e) {
+        $('statusText').textContent = '切換失敗';
+      } finally {
+        select.disabled = false;
+      }
+    };
+
+    const roi = { camera: null, rect: null, drag: null };
+
+    function roiImageUrl(camera) {
+      try {
+        const u = new URL(camera.live_url);
+        const src = u.searchParams.get('src') || camera.id + '_h264';
+        return `${u.protocol}//${u.host}/api/frame.jpeg?src=${encodeURIComponent(src)}&t=${Date.now()}`;
+      } catch (e) {
+        return `http://${location.hostname}:1984/api/frame.jpeg?src=${encodeURIComponent(camera.id + '_h264')}&t=${Date.now()}`;
+      }
+    }
+
+    function drawRoi() {
+      const rect = $('roiRect');
+      if (!roi.rect) { rect.style.display = 'none'; return; }
+      const [x, y, w, h] = roi.rect;
+      rect.style.display = 'block';
+      rect.style.left = (x * 100) + '%';
+      rect.style.top = (y * 100) + '%';
+      rect.style.width = (w * 100) + '%';
+      rect.style.height = (h * 100) + '%';
+    }
+
+    function roiPoint(e) {
+      const img = $('roiImage');
+      const r = img.getBoundingClientRect();
+      return [
+        Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)),
+        Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)),
+      ];
+    }
+
+    function openRoi() {
+      const camera = state.cameras.find((c) => c.id === activeCamera);
+      if (!camera) return;
+      roi.camera = camera.id;
+      roi.rect = camera.roi ? [...camera.roi] : null;
+      $('roiImage').src = roiImageUrl(camera);
+      $('roiModal').classList.add('open');
+      drawRoi();
+    }
+
+    $('roiBtn').onclick = openRoi;
+    $('roiClose').onclick = () => $('roiModal').classList.remove('open');
+    $('roiModal').onclick = (e) => { if (e.target === $('roiModal')) $('roiModal').classList.remove('open'); };
+    $('roiStage').addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const p = roiPoint(e);
+      roi.drag = p;
+      roi.rect = [p[0], p[1], 0.01, 0.01];
+      drawRoi();
+    });
+    $('roiStage').addEventListener('pointermove', (e) => {
+      if (!roi.drag) return;
+      const p = roiPoint(e);
+      const x = Math.min(roi.drag[0], p[0]);
+      const y = Math.min(roi.drag[1], p[1]);
+      const w = Math.max(0.02, Math.abs(p[0] - roi.drag[0]));
+      const h = Math.max(0.02, Math.abs(p[1] - roi.drag[1]));
+      roi.rect = [x, y, Math.min(w, 1 - x), Math.min(h, 1 - y)];
+      drawRoi();
+    });
+    window.addEventListener('pointerup', () => { roi.drag = null; });
+    async function saveRoi(value) {
+      if (!roi.camera) return;
+      const r = await fetch('/api/cameras/' + encodeURIComponent(roi.camera) + '/roi', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({roi: value}),
+      });
+      if (!r.ok) throw new Error('roi save failed');
+      await loadCameras();
+      $('roiModal').classList.remove('open');
+    }
+    $('roiSave').onclick = async () => { try { await saveRoi(roi.rect); } catch (e) { $('statusText').textContent = 'ROI 儲存失敗'; } };
+    $('roiClear').onclick = async () => { roi.rect = null; drawRoi(); try { await saveRoi(null); } catch (e) { $('statusText').textContent = 'ROI 清除失敗'; } };
+
+    refreshStatus();
+    loadCameras();
+    loadEvents();
+    setInterval(refreshStatus, 3000);
+    setInterval(loadEvents, 8000);
+  </script>
+</body>
+</html>

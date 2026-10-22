@@ -1,0 +1,87 @@
+# ALPR Gate configuration.
+# Copy this file to config.yaml and replace every placeholder.
+
+camera:
+  name: garage
+  rtsp_url: "rtsp://USER:PASSWORD@127.0.0.1:8554/garage_alpr"
+  width: 960
+  height: 960
+  fps: 2
+  ffmpeg: "/opt/homebrew/bin/ffmpeg"  # Linux: /usr/bin/ffmpeg
+  startup_timeout: 90
+  read_timeout: 15
+
+# The UI can switch cameras at runtime. The selection is persisted in
+# active_camera.json inside the data directory.
+active_camera: garage
+cameras:
+  garage:
+    label: Garage (test)
+    rtsp_url: "rtsp://USER:PASSWORD@127.0.0.1:8554/garage_alpr"
+    width: 960
+    height: 960
+    fps: 2
+    line_y: 760
+    enter_direction: up
+    live_url: "http://GO2RTC_HOST:1984/stream.html?src=garage_h264"
+  driveway:
+    label: Driveway (production)
+    rtsp_url: "rtsp://USER:PASSWORD@127.0.0.1:8554/driveway_alpr"
+    width: 1920
+    height: 1080
+    fps: 2
+    line_y: 650
+    enter_direction: down
+    live_url: "http://GO2RTC_HOST:1984/stream.html?src=driveway_h264"
+    # Optional normalized crop: x, y, width, height in the 0..1 range.
+    # roi: {x: 0.10, y: 0.25, width: 0.80, height: 0.65}
+
+models:
+  vehicle: "rf-detr-nano-384-coco"
+  vehicle_conf: 0.35
+  plate_detector: "yolo-v9-t-384-license-plate-end2end"
+  plate_ocr: "cct-xs-v2-global-model"
+  min_ocr: 0.90
+  max_vehicles: 3
+  threads: 2
+
+gate:
+  line_y: 760
+  margin: 25
+  min_track_seconds: 0.8
+  dedupe_seconds: 60
+  votes: 2
+  pending_timeout: 8
+  track_max_age: 12
+  enter_direction: up
+
+motion:
+  diff_threshold: 2.5
+  idle_poll_seconds: 8
+
+plates:
+  # Example allowlist. Remove entries or use an empty list for observe-only mode.
+  allow:
+    - AB1234
+  pattern: "^[A-Z]{2,3}[0-9]{4}$"
+  emit_unknown: false
+
+ha:
+  # Leave empty for dry-run mode. Example:
+  # http://HOME_ASSISTANT_HOST:8123/api/webhook/REPLACE_ME
+  webhook_url: ""
+  public_base_url: "http://ALPR_HOST:8099"
+  timeout: 3
+  retries: 3
+
+storage:
+  data_dir: "~/Library/Application Support/alpr-gate"  # Linux: /var/lib/alpr-gate
+  retain_days: 7
+
+api:
+  host: "0.0.0.0"
+  port: 8099
+
+web:
+  # Fallback live view. Per-camera live_url entries above take precedence.
+  live_url: "http://GO2RTC_HOST:1984/stream.html?src=garage_h264"

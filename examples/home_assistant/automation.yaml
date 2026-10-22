@@ -1,0 +1,83 @@
+# Replace every placeholder before saving.
+# The door action is intentionally scoped to the production camera and a
+# closed door contact. Test with the test camera first.
+
+- id: alpr_gate_event
+  alias: ALPR plate event
+  triggers:
+    - trigger: webhook
+      webhook_id: REPLACE_WITH_RANDOM_ID
+      allowed_methods:
+        - POST
+      local_only: true
+  variables:
+    plate: "{{ (trigger.json.plate | default('')) | upper | replace('-', '') | replace(' ', '') }}"
+    direction: "{{ trigger.json.event | default('') }}"
+    camera: "{{ trigger.json.camera | default('') }}"
+  conditions:
+    - condition: template
+      value_template: "{{ plate in ['AB1234'] }}"
+    - condition: template
+      value_template: "{{ direction in ['enter', 'exit'] }}"
+  actions:
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.alpr_last_plate
+      data:
+        value: "{{ plate }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.alpr_last_event
+      data:
+        value: "{{ direction }}"
+    - action: input_datetime.set_datetime
+      target:
+        entity_id: input_datetime.alpr_last_seen
+      data:
+        datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+    # Pulse a momentary relay for one second. Adjust or remove this block
+    # for your door controller. Never rely on OCR alone for a door.
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ direction == 'enter' and camera == 'driveway' }}"
+            - condition: state
+              entity_id: binary_sensor.garage_door_contact
+              state: "off"
+          sequence:
+            - action: switch.turn_on
+              target:
+                entity_id: switch.garage_door_up
+            - delay:
+                seconds: 1
+            - action: switch.turn_off
+              target:
+                entity_id: switch.garage_door_up
+
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ direction == 'enter' }}"
+          sequence:
+            - action: switch.turn_on
+              target:
+                entity_id: switch.outside_light
+        - conditions:
+            - condition: template
+              value_template: "{{ direction == 'exit' }}"
+          sequence:
+            - action: switch.turn_off
+              target:
+                entity_id: switch.outside_light
+
+    - action: persistent_notification.create
+      data:
+        title: "ALPR {{ 'entry' if direction == 'enter' else 'exit' }}"
+        message: "{{ plate }} confidence {{ trigger.json.confidence }}; {{ trigger.json.snapshot }}"
+    - action: logbook.log
+      data:
+        name: ALPR
+        message: "{{ plate }} {{ direction }} from {{ camera }}"
+  mode: queued
+  max: 10

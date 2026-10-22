@@ -1,0 +1,21 @@
+# Example go2rtc stream definitions.
+# Replace camera URLs and credentials. On Linux, remove the VideoToolbox
+# hardware options and adapt the ffmpeg filter to your encoder.
+
+streams:
+  garage:
+    - rtsp://USER:PASSWORD@CAMERA_IP:554/stream1
+  driveway:
+    - rtsp://USER:PASSWORD@CAMERA_IP:554/stream1
+
+  # Low-rate streams consumed by ALPR Gate.
+  garage_alpr:
+    - ffmpeg:garage#video=h264#hardware=videotoolbox#raw=-r 2 -g 4 -bf 0 -vf hwdownload,format=nv12,scale=960:960
+  driveway_alpr:
+    - ffmpeg:driveway#video=h264#hardware=videotoolbox#raw=-r 2 -g 4 -bf 0 -vf hwdownload,format=nv12,scale=1920:1080
+
+  # Smooth streams for the browser; only used while the UI is open.
+  garage_h264:
+    - ffmpeg:garage#video=h264#hardware=videotoolbox#raw=-r 15 -g 30 -bf 0 -vf hwdownload,format=nv12,scale=1264:1264
+  driveway_h264:
+    - ffmpeg:driveway#video=h264#hardware=videotoolbox#raw=-r 15 -g 30 -bf 0 -vf hwdownload,format=nv12,scale=1280:720

@@ -1,0 +1,17 @@
+[Unit]
+Description=ALPR Gate license plate recognition service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alpr
+Group=alpr
+WorkingDirectory=/opt/alpr-gate
+ExecStart=/opt/alpr-gate/venv/bin/python /opt/alpr-gate/alpr_gate.py --config /opt/alpr-gate/config.yaml
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

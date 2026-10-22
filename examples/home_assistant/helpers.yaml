@@ -1,0 +1,13 @@
+input_text:
+  alpr_last_plate:
+    name: ALPR last plate
+    max: 16
+  alpr_last_event:
+    name: ALPR last event
+    max: 16
+
+input_datetime:
+  alpr_last_seen:
+    name: ALPR last seen
+    has_date: true
+    has_time: true

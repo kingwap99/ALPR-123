@@ -1,0 +1,13 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+config.yaml
+*.log
+snapshots/
+events.db
+events.db-*
+active_camera.json
+roi.json
+.DS_Store
+*.egg-info/

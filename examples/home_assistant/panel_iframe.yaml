@@ -1,0 +1,10 @@
+# Optional: add a persistent HA sidebar link.
+# Add this to configuration.yaml and restart Home Assistant.
+# A Webpage-panel dashboard is the preferred approach for newer installations.
+
+panel_iframe:
+  alpr_gate:
+    title: ALPR
+    url: http://ALPR_HOST:8099/
+    icon: mdi:car
+    require_admin: true
