@@ -1,5 +1,7 @@
 # ALPR Gate
 
+<p align="center"><img src="assets/icon-256.png" width="144" alt="ALPR Gate icon"></p>
+
 A small, self-hosted license plate recognition service for a fixed camera. It is designed for Home Assistant automations such as opening a garage door when a known vehicle arrives.
 
 **Installation:** [English](docs/INSTALL.md) | [繁體中文](docs/INSTALL.zh-TW.md)
@@ -18,6 +20,7 @@ The project does not require MQTT, an HA add-on, or a cloud service.
 - Runtime camera switching from the web UI, persisted across restarts.
 - Multi-frame plate voting and a tracked gate line for `enter` / `exit` events.
 - SQLite event history and seven-day JPEG snapshots.
+- Each saved snapshot draws a small reference plate using the bundled TW Plate Sans font, so the OCR result can be compared with the official plate lettering.
 - Built-in web UI: live camera, last event, searchable history, image modal, and ROI editor.
 - Home Assistant webhook integration with a sample automation, helpers, and webpage panel.
 - launchd template for macOS and systemd template for Linux.
@@ -149,6 +152,7 @@ config.example.yaml          annotated example configuration
 requirements.txt             Python dependencies
 deploy/                      launchd, systemd, and installer templates
 scripts/                     macOS installer
+assets/                     icon, icon SVG, and TW Plate Sans font
 examples/go2rtc.yaml         go2rtc stream examples
 examples/home_assistant/     webhook automation, helpers, panel notes
 docs/                        installation, architecture, API

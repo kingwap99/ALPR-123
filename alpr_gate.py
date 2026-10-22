@@ -30,14 +30,18 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fast_alpr import ALPR
 from open_image_models.detection.factory import create_detector
+from PIL import Image, ImageDraw, ImageFont
 
 
 LOG = logging.getLogger("alpr-gate")
 NON_ALNUM = re.compile(r"[^A-Z0-9]")
 SNAPSHOT_RE = re.compile(r"^[A-Za-z0-9._-]+\.jpg$")
 VEHICLE_LABELS = {"car", "truck", "bus"}
+ASSET_DIR = Path(__file__).with_name("assets")
+PLATE_FONT_PATH = ASSET_DIR / "fonts" / "TWPlateSans-Bold.ttf"
 
 
 def now_local() -> datetime:
@@ -50,6 +54,43 @@ def iso_now() -> str:
 
 def normalize_plate(value: str | None) -> str:
     return NON_ALNUM.sub("", (value or "").upper())
+
+
+def format_plate_display(value: str | None) -> str:
+    plate = normalize_plate(value)
+    match = re.fullmatch(r"([A-Z]{2,3})([0-9]{4})", plate)
+    return f"{match.group(1)}-{match.group(2)}" if match else plate
+
+
+def draw_plate_card(image: np.ndarray, plate_text: str, font_path: Path = PLATE_FONT_PATH) -> np.ndarray:
+    """Draw a small reference plate using the bundled plate font."""
+    if not font_path.is_file() or not plate_text:
+        return image
+    height, width = image.shape[:2]
+    plate_w = max(160, min(360, int(width * 0.36)))
+    plate_h = max(64, int(plate_w / 2.45))
+    margin = max(10, int(height * 0.025))
+    card = Image.new("RGBA", (plate_w, plate_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(card)
+    radius = max(8, int(plate_h * 0.12))
+    draw.rounded_rectangle((2, 2, plate_w - 3, plate_h - 3), radius=radius, fill=(247, 250, 255, 255), outline=(155, 168, 187, 255), width=max(2, plate_h // 45))
+    inset = max(5, plate_h // 18)
+    draw.rounded_rectangle((inset, inset, plate_w - inset - 1, plate_h - inset - 1), radius=max(4, radius - 3), outline=(214, 223, 235, 255), width=1)
+    slot_w = max(12, plate_w // 16)
+    slot_h = max(2, plate_h // 45)
+    draw.rounded_rectangle((plate_w * 0.23 - slot_w / 2, inset + 3, plate_w * 0.23 + slot_w / 2, inset + 3 + slot_h), radius=slot_h, fill=(20, 26, 36, 255))
+    draw.rounded_rectangle((plate_w * 0.77 - slot_w / 2, inset + 3, plate_w * 0.77 + slot_w / 2, inset + 3 + slot_h), radius=slot_h, fill=(20, 26, 36, 255))
+    size = max(12, int(plate_h * 0.62))
+    while size > 8:
+        font = ImageFont.truetype(str(font_path), size)
+        box = draw.textbbox((0, 0), plate_text, font=font)
+        if box[2] - box[0] <= plate_w * 0.84 and box[3] - box[1] <= plate_h * 0.60:
+            break
+        size -= 2
+    draw.text((plate_w / 2, plate_h * 0.55), plate_text, font=font, fill=(11, 19, 34, 255), anchor="mm")
+    base = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    base.paste(card, (margin, height - plate_h - margin), card)
+    return cv2.cvtColor(np.array(base.convert("RGB")), cv2.COLOR_RGB2BGR)
 
 
 def parse_roi(value: Any) -> Optional[tuple[float, float, float, float]]:
@@ -1029,9 +1070,10 @@ class Service:
             x1, y1, x2, y2 = track.bbox
             color = (0, 200, 0) if direction == "enter" else (0, 140, 255)
             cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
-            label = f"{plate} {direction} {confidence:.2f}"
+            label = f"{format_plate_display(plate)} {direction} {confidence:.2f}"
             cv2.putText(image, label, (max(8, x1), max(28, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
             cv2.line(image, (0, self.gate_cfg.line_y), (image.shape[1], self.gate_cfg.line_y), (80, 80, 255), 2)
+            image = draw_plate_card(image, format_plate_display(plate))
             cv2.imwrite(str(path), image, [cv2.IMWRITE_JPEG_QUALITY, 86])
             self.last_snapshot_path = path
             return path
@@ -1115,6 +1157,8 @@ def create_app(service: Service) -> FastAPI:
 
     app = FastAPI(title="ALPR Gate", lifespan=lifespan)
     app.state.service = service
+    if ASSET_DIR.is_dir():
+        app.mount("/assets", StaticFiles(directory=ASSET_DIR), name="assets")
 
     dashboard_path = Path(__file__).with_name("dashboard.html")
     active_profile = service.cfg.cameras[service.profile_id]
@@ -1132,6 +1176,13 @@ def create_app(service: Service) -> FastAPI:
             .replace("__CAMERA_ID__", profile.id)
             .replace("__CAMERA_LABEL__", profile.label)
         )
+
+    @app.get("/favicon.ico")
+    async def favicon():
+        icon = ASSET_DIR / "icon-256.png"
+        if not icon.is_file():
+            raise HTTPException(status_code=404, detail="no icon")
+        return FileResponse(icon, media_type="image/png")
 
     @app.get("/api/cameras")
     def cameras(request: Request):

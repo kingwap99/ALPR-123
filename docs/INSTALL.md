@@ -40,6 +40,8 @@ cd ha-alpr-gate
 
 The installer creates `~/alpr-gate`, installs the Python environment, copies the example configuration only if `config.yaml` does not exist, and loads a launchd user agent. Edit the configuration before starting the service for the first time.
 
+The repository includes `assets/icon-256.png` for the UI and `assets/fonts/TWPlateSans-Bold.ttf` for the reference plate drawn on snapshots. `Pillow` is installed from `requirements.txt`.
+
 Manual equivalent:
 
 ```sh

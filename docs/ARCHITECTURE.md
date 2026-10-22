@@ -46,6 +46,8 @@ ROI settings are stored in `roi.json`. Both files are deliberately excluded from
 
 SQLite stores `events(id, ts, plate, direction, confidence, snapshot, payload)`. Snapshots are JPEG files in the data directory. A periodic prune removes events and files older than `retain_days`.
 
+When a snapshot is written, the service also draws a small white reference plate in the lower-left corner. The plate uses `assets/fonts/TWPlateSans-Bold.ttf`, so the OCR result can be compared against the official plate lettering. If the font is missing, the snapshot is still saved with the usual bounding box and text label.
+
 ## Home Assistant boundary
 
 The service does not talk to the HA WebSocket API or hold a long-lived token. It posts a small JSON document to an HA webhook. The automation owns policy: which plates are allowed, which camera may open a door, whether the door contact is closed, and which entities are controlled. This keeps the recognition service replaceable and the physical action auditable in HA.
