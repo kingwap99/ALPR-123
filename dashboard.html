@@ -184,9 +184,8 @@
         const r = await fetch('/api/cameras', { cache: 'no-store' });
         const d = await r.json();
         state.cameras = d.cameras || [];
-        $('cameraSelect').innerHTML = (d.cameras || []).map((c) => `<option value="${esc(c.id)}">${esc(c.label)}</option>`).join('');
-        $('cameraSelect').value = d.active;
         activeCamera = d.active;
+        $('cameraSelect').innerHTML = (d.cameras || []).map((c) => `<option value="${esc(c.id)}"${c.id === d.active ? ' selected' : ''}>${esc(c.label)}</option>`).join('');
         const current = (d.cameras || []).find((c) => c.id === d.active);
         if (current) { setLive(current.live_url); setCameraLabel(current.label); }
       } catch (e) { /* status banner covers failures */ }
@@ -290,6 +289,7 @@
     $('cameraSelect').onchange = async () => {
       const select = $('cameraSelect');
       const id = select.value;
+      if (!id || id === activeCamera) return;
       select.disabled = true;
       try {
         const r = await fetch('/api/cameras/' + encodeURIComponent(id), { method: 'POST' });
