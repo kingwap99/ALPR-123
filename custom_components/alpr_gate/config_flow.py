@@ -79,12 +79,7 @@ class AlprGateConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _ha_url(self) -> str | None:
         """Return an HA URL reachable from the ALPR host."""
         try:
-            return get_url(self.hass, prefer_internal=True, allow_external=False, allow_cloud=False)
-        except TypeError:
-            try:
-                return get_url(self.hass, prefer_internal=True)
-            except NoURLAvailableError:
-                pass
-        except NoURLAvailableError:
+            return get_url(self.hass)
+        except (NoURLAvailableError, TypeError):
             pass
         return self.hass.config.internal_url or self.hass.config.external_url
