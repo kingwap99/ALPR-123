@@ -25,6 +25,12 @@ The project does not require MQTT, an HA add-on, or a cloud service.
 - Home Assistant webhook integration with a sample automation, helpers, and webpage panel.
 - launchd template for macOS and systemd template for Linux.
 
+## Typography
+
+The repository bundles the **TW Plate Sans** family: Regular, Bold, Italic, and Bold Italic. It covers A–Z, small-caps a–z, 0–9, the plate hyphen, and basic punctuation. See [`assets/fonts/README.md`](assets/fonts/README.md) for installation and source notes.
+
+![TW Plate Sans family](assets/fonts/specimen-family.png)
+
 The bundled UI labels are in Traditional Chinese. They are plain HTML strings and can be localized by editing `dashboard.html`.
 
 ## Pipeline
@@ -152,7 +158,7 @@ config.example.yaml          annotated example configuration
 requirements.txt             Python dependencies
 deploy/                      launchd, systemd, and installer templates
 scripts/                     macOS installer
-assets/                     icon, icon SVG, and TW Plate Sans font
+assets/                     icon, icon SVG, and the TW Plate Sans family
 examples/go2rtc.yaml         go2rtc stream examples
 examples/home_assistant/     webhook automation, helpers, panel notes
 docs/                        installation, architecture, API

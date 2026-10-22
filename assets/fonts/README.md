@@ -1,32 +1,45 @@
-# TW Plate Sans Bold
+# TW Plate Sans family
 
-An unofficial TTF/WOFF2 font derived from the Taiwan Highway Bureau new-style plate glyph specification. It is intended for plate mockups, UI demos, and signage experiments.
+An unofficial font family derived from the Taiwan Highway Bureau new-style plate glyph specification. It is intended for plate mockups, UI demos, signage, and display typography.
 
-## Files
+## Styles
 
-- `TWPlateSans-Bold.ttf` — installable TrueType font
-- `TWPlateSans-Bold.woff2` — web font
-- `specimen.png` — specimen sheet
+| File | Family | Style | Weight |
+|---|---|---|---|
+| `TWPlateSans-Regular.ttf` | TW Plate Sans | Regular | 400 |
+| `TWPlateSans-Bold.ttf` | TW Plate Sans | Bold | 700 |
+| `TWPlateSans-Italic.ttf` | TW Plate Sans | Italic | 400 |
+| `TWPlateSans-BoldItalic.ttf` | TW Plate Sans | Bold Italic | 700 |
+
+Each style also has a `.woff2` web font. `specimen-family.png` shows all four.
 
 ## Coverage
 
 - Uppercase A–Z
+- Lowercase a–z, drawn as **small caps** to preserve the plate display style
 - Digits 0–9
 - Hyphen, space
-- `. , : ; /`
-- Lowercase input maps to the uppercase glyphs
+- Basic punctuation: `. , : ; / ! ? + = *`
 
-The official new plate encoding does not use `I`, `O`, or `4`; they are included here so the font remains usable for general text and mockups.
+The official new plate encoding does not use `I`, `O`, or `4`; they are included so the family remains usable for general mockups.
 
 ## Install
 
-macOS: double-click `TWPlateSans-Bold.ttf`, then choose **Install Font** in Font Book.
+macOS: double-click a TTF and choose **Install Font** in Font Book. Install all four files to get the complete family.
 
-Windows: right-click the TTF and choose **Install** or **Install for all users**.
+Windows: select the TTF files, right-click, and choose **Install** or **Install for all users**.
 
 Web:
 
 ```css
+@font-face {
+  font-family: "TW Plate Sans";
+  src: url("TWPlateSans-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @font-face {
   font-family: "TW Plate Sans";
   src: url("TWPlateSans-Bold.woff2") format("woff2");
@@ -35,15 +48,6 @@ Web:
   font-display: swap;
 }
 ```
-
-## Metrics
-
-- Units per em: 1000
-- Cap height: 700
-- Ascender: 800
-- Descender: -200
-- Weight class: 700
-- Width class: condensed (3)
 
 ## Source and terms
 
