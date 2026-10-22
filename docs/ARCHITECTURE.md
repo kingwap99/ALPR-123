@@ -44,7 +44,7 @@ ROI settings are stored in `roi.json`. Both files are deliberately excluded from
 
 ## Persistence
 
-SQLite stores `events(id, ts, plate, direction, confidence, snapshot, payload)`. Snapshots are JPEG files in the data directory. A periodic prune removes events and files older than `retain_days`.
+SQLite stores `events(id, ts, plate, direction, confidence, snapshot, payload)`. Snapshots are JPEG files in the data directory. A periodic prune removes events and files older than the retention window: `retain_days` from the config, overridden at runtime by `retention.json` when the web UI changes it.
 
 When a snapshot is written, the service also draws a small white reference plate in the lower-left corner. The plate uses `assets/fonts/TWPlateSans-Bold.ttf`, so the OCR result can be compared against the official plate lettering. If the font is missing, the snapshot is still saved with the usual bounding box and text label.
 

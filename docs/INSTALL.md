@@ -161,11 +161,13 @@ The automation uses `local_only: true`. Keep the service and HA on the same trus
 
 The iframe works on a local HTTP HA session. A remote HTTPS HA session may block an HTTP iframe; open the ALPR URL directly in that case.
 
-## 7. Camera selection and ROI
+## 7. Camera selection, ROI, and snapshot retention
 
 Choose a camera in the UI; it switches immediately. The selection changes the ALPR source and the live view, is persisted in `active_camera.json`, and survives a restart. Programmatic selector updates during page load are ignored, so reloading the page does not send a switch request.
 
 Use a test camera with a known parked car to validate plate recognition and the webhook first. Switch to the production camera only when the line, direction, and ROI are correct. Opening a garage door is a physical action; test it with the door in view and a manual stop available.
+
+Click **歷史截圖保留 … 天** under the page title to change how long snapshots and history rows are kept (1–365 days). Applying a value prunes older entries immediately, and the hourly cleanup keeps using it. The value is stored in `retention.json` next to the database, so it survives restarts; `retain_days` in `config.yaml` is only the default for a fresh install.
 
 ## 8. Service management
 

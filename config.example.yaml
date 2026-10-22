@@ -76,6 +76,8 @@ ha:
 
 storage:
   data_dir: "~/Library/Application Support/alpr-gate"  # Linux: /var/lib/alpr-gate
+  # Default snapshot retention. The web UI can change this at runtime and the
+  # chosen value is stored in retention.json inside the data directory.
   retain_days: 7
 
 api:

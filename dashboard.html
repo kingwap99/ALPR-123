@@ -33,6 +33,8 @@
     .brand-icon { width: 54px; height: 54px; border-radius: 15px; box-shadow: 0 8px 24px rgba(0,0,0,.28); display: block; }
     h1 { font-size: 26px; margin: 0; letter-spacing: .02em; }
     .sub { color: var(--muted); font-size: 13px; margin-top: 5px; }
+    .inline-link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; border-bottom: 1px dotted rgba(106,169,255,.45); }
+    .inline-link:hover { color: #9cc6ff; }
     .head-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
     .cam-picker { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px; font-size: 12px; color: var(--muted); }
     .cam-picker select { background: transparent; color: var(--text); border: 0; font: inherit; font-size: 13px; outline: none; cursor: pointer; max-width: 190px; }
@@ -87,6 +89,15 @@
     .modal-info { padding: 16px 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
     .modal-info strong { font-size: 24px; letter-spacing: .06em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .modal-close { position: sticky; top: 10px; float: right; margin: 10px; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line); background: rgba(10,16,32,.8); color: var(--text); font-size: 20px; cursor: pointer; }
+    .modal-box.narrow { width: min(420px, 100%); position: relative; overflow: visible; }
+    .modal-body { padding: 20px 20px 20px; display: flex; flex-direction: column; gap: 13px; }
+    .modal-body h3 { margin: 0; font-size: 17px; }
+    .retention-field { display: flex; align-items: center; gap: 9px; }
+    .retention-field input { width: 100px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font: inherit; font-size: 15px; outline: none; }
+    .retention-field input:focus { border-color: var(--accent); }
+    .retention-presets { display: flex; gap: 7px; flex-wrap: wrap; }
+    .retention-presets .btn { padding: 6px 10px; font-size: 12px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
     @media (max-width: 900px) {
       .top { grid-template-columns: 1fr; }
       .live-frame { aspect-ratio: 4 / 3; }
@@ -103,7 +114,7 @@
         <img class="brand-icon" src="/assets/icon-256.png" alt="ALPR-123">
         <div>
           <h1>車牌辨識</h1>
-          <div class="sub">.22 · <span id="cameraLabel">__CAMERA_LABEL__</span> · 歷史截圖保留 7 天</div>
+          <div class="sub">.22 · <span id="cameraLabel">__CAMERA_LABEL__</span> · <button type="button" class="inline-link" id="retentionBtn">歷史截圖保留 <span id="retainDays">__RETAIN_DAYS__</span> 天</button></div>
         </div>
       </div>
       <div class="head-right">
@@ -164,6 +175,31 @@
       <div class="roi-actions">
         <span>在畫面上拖曳框選車牌可能出現的區域；框外不跑 motion / 車輛偵測。</span>
         <div class="buttons"><button class="btn" id="roiClear">清除</button><button class="btn" id="roiSave">儲存</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="retentionModal" role="dialog" aria-modal="true" aria-labelledby="retentionTitle">
+    <div class="modal-box narrow">
+      <button class="modal-close" id="retentionClose" aria-label="關閉">×</button>
+      <div class="modal-body">
+        <h3 id="retentionTitle">歷史截圖保留天數</h3>
+        <div class="muted" style="font-size:13px;line-height:1.6">超過設定天數的進出紀錄與截圖會被刪除。套用後會立刻清理一次，之後每小時再檢查。</div>
+        <div class="retention-field">
+          <input id="retainInput" type="number" min="1" max="365" step="1" inputmode="numeric" aria-label="保留天數">
+          <span class="muted">天（1–365）</span>
+        </div>
+        <div class="retention-presets">
+          <button class="btn" type="button" data-days="3">3 天</button>
+          <button class="btn" type="button" data-days="7">7 天</button>
+          <button class="btn" type="button" data-days="14">14 天</button>
+          <button class="btn" type="button" data-days="30">30 天</button>
+          <button class="btn" type="button" data-days="90">90 天</button>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" id="retentionCancel" type="button">取消</button>
+          <button class="btn" id="retentionSave" type="button">套用</button>
+        </div>
       </div>
     </div>
   </div>
@@ -413,6 +449,47 @@
     }
     $('roiSave').onclick = async () => { try { await saveRoi(roi.rect); } catch (e) { $('statusText').textContent = 'ROI 儲存失敗'; } };
     $('roiClear').onclick = async () => { roi.rect = null; drawRoi(); try { await saveRoi(null); } catch (e) { $('statusText').textContent = 'ROI 清除失敗'; } };
+
+    let retentionDays = Number($('retainDays').textContent) || 7;
+
+    function openRetention() {
+      $('retainInput').value = retentionDays;
+      $('retentionModal').classList.add('open');
+      $('retainInput').focus();
+      $('retainInput').select();
+    }
+
+    function closeRetention() {
+      $('retentionModal').classList.remove('open');
+    }
+
+    async function saveRetention() {
+      const days = Number($('retainInput').value);
+      if (!Number.isInteger(days) || days < 1 || days > 365) {
+        $('statusText').textContent = '保留天數需為 1–365';
+        return;
+      }
+      const r = await fetch('/api/settings/retention', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({days}),
+      });
+      if (!r.ok) throw new Error('retention save failed');
+      const data = await r.json();
+      retentionDays = data.retain_days;
+      $('retainDays').textContent = retentionDays;
+      closeRetention();
+      $('statusText').textContent = '歷史截圖保留 ' + retentionDays + ' 天';
+    }
+
+    $('retentionBtn').onclick = openRetention;
+    $('retentionClose').onclick = closeRetention;
+    $('retentionCancel').onclick = closeRetention;
+    $('retentionModal').onclick = (e) => { if (e.target === $('retentionModal')) closeRetention(); };
+    document.querySelectorAll('#retentionModal [data-days]').forEach((btn) => {
+      btn.onclick = () => { $('retainInput').value = btn.dataset.days; };
+    });
+    $('retentionSave').onclick = async () => {
+      try { await saveRetention(); } catch (e) { $('statusText').textContent = '保留天數儲存失敗'; }
+    };
 
     refreshStatus();
     loadCameras();

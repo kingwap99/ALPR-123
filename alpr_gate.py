@@ -122,6 +122,14 @@ def safe_int(value: Any, default: int) -> int:
         return default
 
 
+def parse_retention(value: Any) -> Optional[int]:
+    """Return a valid snapshot retention in days, or None."""
+    days = safe_int(value, 0)
+    if 1 <= days <= 365:
+        return days
+    return None
+
+
 def safe_float(value: Any, default: float) -> float:
     try:
         return float(value)
@@ -737,6 +745,13 @@ class Service:
         self.data_dir = cfg.storage.data_dir
         self.snapshot_dir = self.data_dir / "snapshots"
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        self.retention_path = self.data_dir / "retention.json"
+        self.retain_days = parse_retention(cfg.storage.retain_days) or 7
+        try:
+            saved_retention = json.loads(self.retention_path.read_text())
+            self.retain_days = parse_retention(saved_retention.get("days")) or self.retain_days
+        except Exception:
+            pass
         self.store = Store(self.data_dir / "events.db")
         self.integration_path = self.data_dir / "integration.json"
         self.webhook_url = ""
@@ -1123,14 +1138,27 @@ class Service:
         except Exception as exc:
             LOG.warning("could not persist integration webhook: %s", exc)
 
+    def set_retention(self, days: Any) -> int:
+        value = parse_retention(days)
+        if value is None:
+            raise ValueError("retention must be between 1 and 365 days")
+        self.retain_days = value
+        try:
+            self.retention_path.write_text(json.dumps({"days": value}))
+        except Exception as exc:
+            LOG.warning("could not persist retention: %s", exc)
+        LOG.info("snapshot retention set to %s days", value)
+        self._prune()
+        return value
+
     def _prune(self) -> None:
         try:
-            cutoff = time.time() - self.cfg.storage.retain_days * 86400
+            cutoff = time.time() - self.retain_days * 86400
             for path in self.snapshot_dir.glob("*.jpg"):
                 if path.stat().st_mtime < cutoff and path != self.last_snapshot_path:
                     path.unlink(missing_ok=True)
-            self.store.prune(self.cfg.storage.retain_days)
-            LOG.info("pruned snapshots older than %s days", self.cfg.storage.retain_days)
+            self.store.prune(self.retain_days)
+            LOG.info("pruned snapshots older than %s days", self.retain_days)
         except Exception as exc:
             LOG.warning("prune failed: %s", exc)
 
@@ -1153,6 +1181,7 @@ class Service:
                 except Exception:
                     data["last_frame_age"] = None
             data["events_today"] = self.store.count_today()
+            data["retain_days"] = self.retain_days
         return data
 
     def healthy(self) -> bool:
@@ -1190,6 +1219,7 @@ def create_app(service: Service) -> FastAPI:
             html.replace("__LIVE_URL__", profile.live_url)
             .replace("__CAMERA_ID__", profile.id)
             .replace("__CAMERA_LABEL__", profile.label)
+            .replace("__RETAIN_DAYS__", str(service.retain_days))
         )
 
     @app.get("/favicon.ico")
@@ -1222,6 +1252,20 @@ def create_app(service: Service) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid roi")
         svc.set_roi(camera_id, roi)
         return svc.cameras_info()
+
+    @app.get("/api/settings")
+    def get_settings(request: Request):
+        svc: Service = request.app.state.service
+        return {"retain_days": svc.retain_days}
+
+    @app.post("/api/settings/retention")
+    def set_retention(payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        try:
+            days = svc.set_retention(payload.get("days"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"retain_days": days}
 
     @app.post("/api/integration/webhook")
     def set_integration_webhook(payload: dict[str, Any], request: Request):

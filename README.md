@@ -19,7 +19,7 @@ The project does not require MQTT, an HA add-on, or a cloud service.
 - Optional normalized ROI per camera; motion and detection ignore everything outside the ROI.
 - Runtime camera switching from the web UI, persisted across restarts.
 - Multi-frame plate voting and a tracked gate line for `enter` / `exit` events.
-- SQLite event history and seven-day JPEG snapshots.
+- SQLite event history and JPEG snapshots with a retention period you can change in the web UI (1–365 days, default 7).
 - Each saved snapshot draws a small reference plate using the bundled TW Plate Sans font, so the OCR result can be compared with the official plate lettering.
 - Built-in web UI: live camera, last event, searchable history, image modal, and ROI editor.
 - Home Assistant webhook integration with a sample automation, helpers, and webpage panel.
