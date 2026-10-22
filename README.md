@@ -57,8 +57,8 @@ The default models are downloaded on first run and cached under `~/.cache/open-i
 ## Quick start
 
 ```sh
-git clone https://github.com/kingwap99/ha-alpr-gate.git
-cd ha-alpr-gate
+git clone https://github.com/kingwap99/ALPR-123.git
+cd ALPR-123
 
 /opt/homebrew/bin/python3.11 -m venv venv
 venv/bin/pip install -U pip

@@ -33,8 +33,8 @@ rtsp://GO2RTC_USER:GO2RTC_PASSWORD@GO2RTC_HOST:8554/driveway_alpr
 ### macOS
 
 ```sh
-git clone https://github.com/kingwap99/ha-alpr-gate.git
-cd ha-alpr-gate
+git clone https://github.com/kingwap99/ALPR-123.git
+cd ALPR-123
 ./scripts/install_macos.sh
 ```
 
@@ -57,7 +57,7 @@ chmod 600 config.yaml
 ```sh
 sudo mkdir -p /opt/alpr-gate
 sudo chown "$USER": "$USER" /opt/alpr-gate
-git clone https://github.com/kingwap99/ha-alpr-gate.git /opt/alpr-gate
+git clone https://github.com/kingwap99/ALPR-123.git /opt/alpr-gate
 cd /opt/alpr-gate
 python3 -m venv venv
 venv/bin/pip install -U pip
