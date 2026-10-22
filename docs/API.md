@@ -43,9 +43,10 @@ Returns the active camera and every profile, including `line_y`, `enter_directio
 
 ```http
 POST /api/cameras/driveway
+X-ALPR-Switch: 1
 ```
 
-Stops the current capture and starts the named profile. The response is the updated camera list. Switching takes 10–30 seconds while the new RTSP reader waits for a keyframe.
+The `X-ALPR-Switch: 1` header is required so a stale or programmatic page load cannot switch cameras. Stops the current capture and starts the named profile. The response is the updated camera list. Switching takes 10–30 seconds while the new RTSP reader waits for a keyframe.
 
 ## ROI
 

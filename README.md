@@ -69,7 +69,7 @@ The first RTSP frame can take 10–30 seconds while ffmpeg waits for a keyframe.
 
 Each camera has its own RTSP source, resolution, line, direction, live URL, and optional ROI. Camera IDs are arbitrary; they must match the go2rtc stream names in your configuration.
 
-The UI selector is a two-step control: choose a camera, then press **Apply**. This prevents a page reload from sending an accidental switch request. The service stops the current capture, starts the selected one, resets the tracker, and persists the choice in `active_camera.json`. The models stay loaded.
+The UI selector switches immediately. Programmatic selector updates during page load are guarded, so reloading the page does not send an accidental switch request. The service stops the current capture, starts the selected one, resets the tracker, and persists the choice in `active_camera.json`. The models stay loaded.
 
 Recommended setup:
 

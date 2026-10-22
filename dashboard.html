@@ -102,8 +102,7 @@
       </div>
       <div class="head-right">
         <button class="btn" id="roiBtn">偵測範圍</button>
-        <div class="cam-picker"><span>監測鏡頭</span><select id="cameraSelect" aria-label="監測鏡頭"></select></div>
-        <button class="btn" id="cameraApply" disabled>套用</button>
+        <div class="cam-picker"><span>監測鏡頭</span><select id="cameraSelect" aria-label="監測鏡頭" autocomplete="off"></select></div>
         <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">連線中…</span></div>
       </div>
     </header>
@@ -168,6 +167,15 @@
     const state = { events: [], last: null, cameras: [] };
     let liveUrl = document.body.dataset.liveUrl;
     let activeCamera = document.body.dataset.cameraId;
+    let cameraProgrammatic = false;
+    let cameraUserGesture = false;
+    let cameraGestureTimer = 0;
+
+    function armCameraGesture() {
+      cameraUserGesture = true;
+      clearTimeout(cameraGestureTimer);
+      cameraGestureTimer = setTimeout(() => { cameraUserGesture = false; }, 30000);
+    }
 
     function setLive(url) {
       if (!url) return;
@@ -185,11 +193,13 @@
         const r = await fetch('/api/cameras', { cache: 'no-store' });
         const d = await r.json();
         state.cameras = d.cameras || [];
+        cameraProgrammatic = true;
         activeCamera = d.active;
         $('cameraSelect').innerHTML = (d.cameras || []).map((c) => `<option value="${esc(c.id)}"${c.id === d.active ? ' selected' : ''}>${esc(c.label)}</option>`).join('');
-        $('cameraApply').disabled = true;
+        $('cameraSelect').value = d.active;
         const current = (d.cameras || []).find((c) => c.id === d.active);
         if (current) { setLive(current.live_url); setCameraLabel(current.label); }
+        setTimeout(() => { cameraProgrammatic = false; }, 700);
       } catch (e) { /* status banner covers failures */ }
     }
 
@@ -288,19 +298,19 @@
     $('q').addEventListener('input', () => { clearTimeout(window._q); window._q = setTimeout(loadEvents, 250); });
     $('direction').onchange = loadEvents;
     $('day').onchange = loadEvents;
-    $('cameraSelect').onchange = () => {
+    $('cameraSelect').addEventListener('pointerdown', armCameraGesture);
+    $('cameraSelect').addEventListener('keydown', armCameraGesture);
+    $('cameraSelect').onchange = async () => {
       const select = $('cameraSelect');
-      const id = select.value;
-      $('cameraApply').disabled = !id || id === activeCamera;
-    };
-    $('cameraApply').onclick = async () => {
-      const select = $('cameraSelect');
+      if (cameraProgrammatic || !cameraUserGesture) {
+        select.value = activeCamera;
+        return;
+      }
       const id = select.value;
       if (!id || id === activeCamera) return;
       select.disabled = true;
-      $('cameraApply').disabled = true;
       try {
-        const r = await fetch('/api/cameras/' + encodeURIComponent(id), { method: 'POST' });
+        const r = await fetch('/api/cameras/' + encodeURIComponent(id), { method: 'POST', headers: {'X-ALPR-Switch': '1'} });
         if (!r.ok) throw new Error('switch failed');
         const d = await r.json();
         activeCamera = d.active;
@@ -310,9 +320,10 @@
         setTimeout(refreshStatus, 1200);
       } catch (e) {
         $('statusText').textContent = '切換失敗';
+        select.value = activeCamera;
       } finally {
         select.disabled = false;
-        $('cameraApply').disabled = true;
+        cameraUserGesture = false;
       }
     };
 

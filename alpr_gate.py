@@ -1140,6 +1140,8 @@ def create_app(service: Service) -> FastAPI:
     @app.post("/api/cameras/{camera_id}")
     def set_camera(camera_id: str, request: Request):
         svc: Service = request.app.state.service
+        if request.headers.get("X-ALPR-Switch") != "1":
+            raise HTTPException(status_code=400, detail="missing X-ALPR-Switch header")
         if not svc.switch_camera(camera_id):
             raise HTTPException(status_code=404, detail="unknown camera")
         return svc.cameras_info()
