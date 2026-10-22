@@ -53,8 +53,13 @@
     .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 15px 17px; border-bottom: 1px solid var(--line); }
     .card-head h2 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .02em; }
     .card-head .hint { color: var(--muted); font-size: 12px; }
+    .head-tools { display: flex; align-items: center; gap: 10px; }
+    .btn.small { padding: 5px 9px; font-size: 12px; }
     .live-frame { position: relative; background: #05080f; aspect-ratio: 16 / 10; min-height: 300px; }
     .live-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .roi-overlay { position: absolute; inset: 0; pointer-events: none; }
+    .roi-overlay-box { position: absolute; border: 2px dashed rgba(95,224,184,.95); background: rgba(95,224,184,.07); border-radius: 6px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
+    .roi-overlay-box span { position: absolute; top: -12px; left: 8px; background: rgba(8,26,22,.92); color: var(--enter); border: 1px solid rgba(95,224,184,.5); border-radius: 999px; padding: 2px 8px; font-size: 11px; letter-spacing: .04em; white-space: nowrap; }
     .live-foot { padding: 10px 16px 14px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
     .last-card { display: flex; flex-direction: column; }
     .last-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; height: 100%; }
@@ -126,8 +131,8 @@
 
     <div class="top">
       <section class="card">
-        <div class="card-head"><h2>即時畫面</h2><span class="hint" id="frameAge"></span></div>
-        <div class="live-frame"><iframe id="liveFrame" title="即時車庫畫面" allow="autoplay; fullscreen" referrerpolicy="no-referrer"></iframe></div>
+        <div class="card-head"><h2>即時畫面</h2><div class="head-tools"><span class="hint" id="frameAge"></span><button class="btn small" type="button" id="roiToggle">隱藏偵測範圍</button></div></div>
+        <div class="live-frame"><iframe id="liveFrame" title="即時車庫畫面" allow="autoplay; fullscreen" referrerpolicy="no-referrer"></iframe><div class="roi-overlay" id="roiOverlay" style="display:none"><div class="roi-overlay-box" id="roiBox"><span>偵測範圍</span></div></div></div>
         <div class="live-foot"><span>ALPR 判斷用 2fps；這裡顯示 15fps 畫面。切換鏡頭後需 10–30 秒重新連線。</span><a id="liveLink" target="_blank" rel="noreferrer">另開 go2rtc</a></div>
       </section>
 
@@ -212,6 +217,7 @@
     let cameraProgrammatic = false;
     let cameraUserGesture = false;
     let cameraGestureTimer = 0;
+    let showRoi = localStorage.getItem('alpr-show-roi') !== '0';
 
     function armCameraGesture() {
       cameraUserGesture = true;
@@ -241,8 +247,39 @@
         $('cameraSelect').value = d.active;
         const current = (d.cameras || []).find((c) => c.id === d.active);
         if (current) { setLive(current.live_url); setCameraLabel(current.label); }
+        drawLiveRoi();
         setTimeout(() => { cameraProgrammatic = false; }, 700);
       } catch (e) { /* status banner covers failures */ }
+    }
+
+    function drawLiveRoi() {
+      const overlay = $('roiOverlay');
+      const box = $('roiBox');
+      const toggle = $('roiToggle');
+      const camera = state.cameras.find((c) => c.id === activeCamera);
+      const rect = camera && camera.roi;
+      if (!rect) {
+        overlay.style.display = 'none';
+        toggle.style.display = 'none';
+        return;
+      }
+      toggle.style.display = '';
+      toggle.textContent = showRoi ? '隱藏偵測範圍' : '顯示偵測範圍';
+      if (!showRoi) { overlay.style.display = 'none'; return; }
+      overlay.style.display = 'block';
+      const stage = $('liveFrame').parentElement;
+      const width = stage.clientWidth;
+      const height = stage.clientHeight;
+      const aspect = (camera.width && camera.height) ? camera.width / camera.height : 16 / 9;
+      let videoW = width;
+      let videoH = width / aspect;
+      if (videoH > height) { videoH = height; videoW = height * aspect; }
+      const offsetX = (width - videoW) / 2;
+      const offsetY = (height - videoH) / 2;
+      box.style.left = (offsetX + rect[0] * videoW) + 'px';
+      box.style.top = (offsetY + rect[1] * videoH) + 'px';
+      box.style.width = (rect[2] * videoW) + 'px';
+      box.style.height = (rect[3] * videoH) + 'px';
     }
 
     function fmtTime(ts) {
@@ -449,6 +486,12 @@
     }
     $('roiSave').onclick = async () => { try { await saveRoi(roi.rect); } catch (e) { $('statusText').textContent = 'ROI 儲存失敗'; } };
     $('roiClear').onclick = async () => { roi.rect = null; drawRoi(); try { await saveRoi(null); } catch (e) { $('statusText').textContent = 'ROI 清除失敗'; } };
+    $('roiToggle').onclick = () => {
+      showRoi = !showRoi;
+      localStorage.setItem('alpr-show-roi', showRoi ? '1' : '0');
+      drawLiveRoi();
+    };
+    window.addEventListener('resize', drawLiveRoi);
 
     let retentionDays = Number($('retainDays').textContent) || 7;
 

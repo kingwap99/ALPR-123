@@ -167,6 +167,8 @@ Choose a camera in the UI; it switches immediately. The selection changes the AL
 
 Use a test camera with a known parked car to validate plate recognition and the webhook first. Switch to the production camera only when the line, direction, and ROI are correct. Opening a garage door is a physical action; test it with the door in view and a manual stop available.
 
+The saved ROI is outlined with a dashed box on the live view, fitted to the displayed video area. Use **隱藏偵測範圍 / 顯示偵測範圍** in the live card header to toggle it; the choice is remembered in the browser.
+
 Click **歷史截圖保留 … 天** under the page title to change how long snapshots and history rows are kept (1–365 days). Applying a value prunes older entries immediately, and the hourly cleanup keeps using it. The value is stored in `retention.json` next to the database, so it survives restarts; `retain_days` in `config.yaml` is only the default for a fresh install.
 
 ## 8. Service management

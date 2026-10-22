@@ -16,7 +16,7 @@ The project does not require MQTT, an HA add-on, or a cloud service.
 
 - Vehicle detection followed by plate detection and OCR (`fast-alpr`).
 - Motion gate so models are skipped when nothing changes.
-- Optional normalized ROI per camera; motion and detection ignore everything outside the ROI.
+- Optional normalized ROI per camera; motion and detection ignore everything outside the ROI, and the area is outlined on the live view.
 - Runtime camera switching from the web UI, persisted across restarts.
 - Multi-frame plate voting and a tracked gate line for `enter` / `exit` events.
 - SQLite event history and JPEG snapshots with a retention period you can change in the web UI (1–365 days, default 7).
