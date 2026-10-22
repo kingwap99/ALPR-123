@@ -216,6 +216,12 @@
       return d.toLocaleString('zh-TW', { hour12: false });
     }
 
+    function fmtPlate(value) {
+      const plate = String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const match = plate.match(/^([A-Z]{2,3})([0-9]{4})$/);
+      return match ? `${match[1]}-${match[2]}` : plate;
+    }
+
     function esc(v) {
       return String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
@@ -242,7 +248,7 @@
     function renderLast(ev) {
       if (!ev) return;
       state.last = ev;
-      $('lastPlate').textContent = ev.plate || '—';
+      $('lastPlate').textContent = fmtPlate(ev.plate) || '—';
       $('lastMeta').innerHTML = `${badge(ev.direction, ev.test)} <span>${esc(fmtTime(ev.ts))}</span> <span>信心 ${(Number(ev.confidence) * 100).toFixed(1)}%</span>`;
       $('lastTime').textContent = fmtTime(ev.ts);
       const img = $('lastImage');
@@ -264,7 +270,7 @@
         el.innerHTML = `
           ${ev.snapshot_url ? `<img loading="lazy" src="${esc(ev.snapshot_url)}" alt="${esc(ev.plate)}">` : '<div style="aspect-ratio:4/3;background:#05080f"></div>'}
           <div class="event-body">
-            <div class="event-plate">${esc(ev.plate)}</div>
+            <div class="event-plate">${esc(fmtPlate(ev.plate))}</div>
             <div class="event-meta"><span>${badge(ev.direction, ev.test)}</span><span>${esc(fmtTime(ev.ts))}</span></div>
             <div class="event-meta"><span>信心 ${(Number(ev.confidence) * 100).toFixed(1)}%</span><span>#${ev.id}</span></div>
           </div>`;
@@ -290,7 +296,7 @@
     }
 
     function openModal(ev) {
-      $('modalPlate').textContent = ev.plate || '—';
+      $('modalPlate').textContent = fmtPlate(ev.plate) || '—';
       $('modalMeta').innerHTML = `${badge(ev.direction, ev.test)} <span>${esc(fmtTime(ev.ts))}</span> <span>信心 ${(Number(ev.confidence) * 100).toFixed(1)}%</span>`;
       $('modalImage').src = ev.snapshot_url || '';
       $('modalRaw').href = ev.snapshot_url || '#';
