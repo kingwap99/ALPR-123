@@ -516,6 +516,7 @@ class Track:
     pending_at: float = 0.0
     last_event: dict[str, float] = field(default_factory=dict)
     unknown_logged: bool = False
+    sent: bool = False
 
     @property
     def center_x(self) -> float:
@@ -533,6 +534,7 @@ class Tracker:
         self.on_event = on_event
         self.tracks: dict[int, Track] = {}
         self.next_id = 1
+        self.last_plate_event: dict[str, float] = {}
 
     @staticmethod
     def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
@@ -592,9 +594,34 @@ class Tracker:
             used.add(track.id)
             self._update_track(track, box, plate, conf, frame, now)
 
-        expired = [tid for tid, track in self.tracks.items() if now - track.last_seen > self.cfg.track_max_age]
-        for tid in expired:
-            self.tracks.pop(tid, None)
+        for tid, track in list(self.tracks.items()):
+            idle = now - track.last_seen
+            # A confirmed plate that never crossed the gate line is still worth
+            # recording: cars that pass by or stop short of the line would
+            # otherwise never appear in the history.
+            if track.pending is None and not track.sent and idle >= 2.5 and track.votes:
+                best, count = track.votes.most_common(1)[0]
+                if count >= self.cfg.votes and best and self._allowed(best) and self._claim_event(best, now):
+                    direction = self._classify(track)
+                    track.sent = True
+                    LOG.info("track %s logged as %s without a gate crossing", track.id, direction)
+                    self.on_event(best, direction, track.confidence.get(best, 0.0), track, frame)
+            if idle > self.cfg.track_max_age:
+                self.tracks.pop(tid, None)
+
+    @staticmethod
+    def _classify(track: Track) -> str:
+        recent = [ground for (ts, ground) in track.history if ts >= track.last_seen - 2.0]
+        if len(recent) >= 2 and (max(recent) - min(recent)) <= 25:
+            return "stop"
+        return "pass"
+
+    def _claim_event(self, plate: str, now: float) -> bool:
+        last = self.last_plate_event.get(plate)
+        if last is not None and now - last < self.cfg.dedupe_seconds:
+            return False
+        self.last_plate_event[plate] = now
+        return True
 
     def _update_track(
         self,
@@ -633,11 +660,9 @@ class Tracker:
         if track.pending:
             best, count = track.votes.most_common(1)[0] if track.votes else ("", 0)
             if count >= self.cfg.votes and best:
-                if self._allowed(best):
-                    last = track.last_event.get(track.pending)
-                    if last is None or now - last >= self.cfg.dedupe_seconds:
-                        track.last_event[track.pending] = now
-                        self.on_event(best, track.pending, track.confidence.get(best, 0.0), track, frame)
+                if self._allowed(best) and self._claim_event(best, now):
+                    track.sent = True
+                    self.on_event(best, track.pending, track.confidence.get(best, 0.0), track, frame)
                 track.pending = None
                 track.votes.clear()
             elif now - track.pending_at >= self.cfg.pending_timeout:
@@ -1090,7 +1115,12 @@ class Service:
             path = self.snapshot_dir / name
             image = frame.copy()
             x1, y1, x2, y2 = track.bbox
-            color = (0, 200, 0) if direction == "enter" else (0, 140, 255)
+            color = {
+                "enter": (0, 200, 0),
+                "exit": (0, 140, 255),
+                "pass": (0, 180, 255),
+                "stop": (200, 140, 255),
+            }.get(direction, (0, 140, 255))
             cv2.rectangle(image, (x1, y1), (x2, y2), color, 3)
             label = f"{format_plate_display(plate)} {direction} {confidence:.2f}"
             cv2.putText(image, label, (max(8, x1), max(28, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)

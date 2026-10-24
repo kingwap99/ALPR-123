@@ -68,6 +68,8 @@
     .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 650; }
     .badge.enter { background: rgba(85,214,176,.13); color: var(--enter); border: 1px solid rgba(85,214,176,.28); }
     .badge.exit { background: rgba(255,180,94,.13); color: var(--exit); border: 1px solid rgba(255,180,94,.28); }
+    .badge.pass { background: rgba(106,169,255,.13); color: var(--accent); border: 1px solid rgba(106,169,255,.3); }
+    .badge.stop { background: rgba(176,140,255,.13); color: var(--test); border: 1px solid rgba(176,140,255,.3); }
     .badge.test { background: rgba(176,140,255,.13); color: var(--test); border: 1px solid rgba(176,140,255,.3); }
     .last-img { border-radius: 12px; overflow: hidden; background: #05080f; border: 1px solid var(--line); }
     .last-img img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; }
@@ -152,7 +154,7 @@
         <h2>歷史進出 <span class="muted" id="eventCount" style="font-weight:400;font-size:12px"></span></h2>
         <div class="filters">
           <input id="q" type="search" placeholder="搜尋車牌" autocomplete="off">
-          <select id="direction"><option value="">全部</option><option value="enter">進入</option><option value="exit">離開</option></select>
+          <select id="direction"><option value="">全部</option><option value="enter">進入</option><option value="exit">離開</option><option value="pass">經過</option><option value="stop">暫停</option></select>
           <input id="day" type="date">
           <button class="btn" id="refresh">重新整理</button>
         </div>
@@ -300,7 +302,9 @@
     }
 
     function badge(direction, test) {
-      const d = direction === 'enter' ? '<span class="badge enter">進入</span>' : '<span class="badge exit">離開</span>';
+      const labels = { enter: ['enter', '進入'], exit: ['exit', '離開'], pass: ['pass', '經過'], stop: ['stop', '暫停'] };
+      const [cls, text] = labels[direction] || ['exit', esc(direction || '—')];
+      const d = `<span class="badge ${cls}">${text}</span>`;
       return d + (test ? ' <span class="badge test">TEST</span>' : '');
     }
 

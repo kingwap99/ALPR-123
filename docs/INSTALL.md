@@ -110,7 +110,7 @@ Open `http://ALPR_HOST:8099/` and check:
 
 - The status pill says the service is healthy.
 - The live camera loads.
-- A known plate produces an event when it crosses the configured line.
+- A known plate produces an `enter`/`exit` event when it crosses the configured line, and a `pass`/`stop` entry when it drives by or stops without crossing.
 - The history card opens a full snapshot.
 
 The first frame can take 10–30 seconds because ffmpeg waits for a keyframe. The health endpoint returns 503 until the first frame arrives.

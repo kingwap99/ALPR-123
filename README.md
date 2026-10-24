@@ -18,7 +18,7 @@ The project does not require MQTT, an HA add-on, or a cloud service.
 - Motion gate so models are skipped when nothing changes.
 - Optional normalized ROI per camera; motion and detection ignore everything outside the ROI, and the area is outlined on the live view.
 - Runtime camera switching from the web UI, persisted across restarts.
-- Multi-frame plate voting and a tracked gate line for `enter` / `exit` events.
+- Multi-frame plate voting and a tracked gate line for `enter` / `exit` events; cars that pass by or stop short of the line are recorded as `pass` / `stop`.
 - SQLite event history and JPEG snapshots with a retention period you can change in the web UI (1–365 days, default 7).
 - Each saved snapshot draws a small reference plate using the bundled TW Plate Sans font, so the OCR result can be compared with the official plate lettering.
 - Built-in web UI: live camera, last event, searchable history, image modal, and ROI editor.

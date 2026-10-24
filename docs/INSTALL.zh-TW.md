@@ -106,7 +106,7 @@ venv/bin/python alpr_gate.py --config config.yaml --dry-run
 
 - 狀態顯示服務正常。
 - 即時畫面能播放。
-- 已知車牌跨越判斷線時會產生事件。
+- 車牌跨越判斷線時產生 `enter` / `exit` 事件；沒有跨越（經過、暫停或直接轉入車位）的車輛，在離開畫面後會補記一筆 `pass` 或 `stop`，所以歷史裡不會漏掉沒開門的車。
 - 點歷史卡片可以放大截圖。
 
 第一個畫面可能要等 10–30 秒，因為 ffmpeg 在等 keyframe；這段時間 `/health` 會回 503。
