@@ -180,6 +180,7 @@ class GateCfg:
     track_max_age: float
     enter_direction: str = "up"
     record_mode: str = "all"
+    match_seconds: float = 12.0
 
 
 @dataclass
@@ -341,6 +342,7 @@ def load_config(path: Path) -> Config:
             track_max_age=max(2.0, safe_float(gate.get("track_max_age"), 12.0)),
             enter_direction=active_profile.enter_direction,
             record_mode=parse_record_mode(gate.get("record_mode")),
+            match_seconds=max(1.0, safe_float(gate.get("match_seconds"), 12.0)),
         ),
         cameras=profiles,
         active_camera=active_camera,
@@ -527,7 +529,8 @@ class Track:
     pending_at: float = 0.0
     last_event: dict[str, float] = field(default_factory=dict)
     unknown_logged: bool = False
-    sent: bool = False
+    gate_sent: bool = False
+    activity_sent: bool = False
 
     @property
     def center_x(self) -> float:
@@ -556,7 +559,8 @@ class Tracker:
         self.record_mode = record_mode
         self.tracks: dict[int, Track] = {}
         self.next_id = 1
-        self.last_plate_event: dict[str, float] = {}
+        self.last_gate_event: dict[str, float] = {}
+        self.last_activity: dict[str, float] = {}
 
     @staticmethod
     def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
@@ -579,7 +583,7 @@ class Tracker:
         by = (box[1] + box[3]) / 2.0
         diag = max(1.0, float(np.hypot(box[2] - box[0], box[3] - box[1])))
         for track in self.tracks.values():
-            if now - track.last_seen > 1.5:
+            if now - track.last_seen > self.cfg.match_seconds:
                 continue
             dist = float(np.hypot(bx - track.center_x, by - track.center_y))
             max_dist = 1.5 * diag
@@ -623,16 +627,15 @@ class Tracker:
             # otherwise never appear in the history.
             if (
                 track.pending is None
-                and not track.sent
+                and not track.activity_sent
                 and idle >= 2.5
                 and track.votes
                 and self._records_activity()
             ):
                 best, count = track.votes.most_common(1)[0]
-                window = max(self.cfg.dedupe_seconds, self.FALLBACK_DEDUPE_SECONDS)
-                if count >= self.cfg.votes and best and self._allowed(best) and self._claim_event(best, now, window):
+                if count >= self.cfg.votes and best and self._allowed(best) and self._claim_activity(best, now):
                     direction = self._classify(track)
-                    track.sent = True
+                    track.activity_sent = True
                     LOG.info("track %s logged as %s without a gate crossing", track.id, direction)
                     self.on_event(best, direction, track.confidence.get(best, 0.0), track, frame)
             if idle > self.cfg.track_max_age:
@@ -653,12 +656,19 @@ class Tracker:
             mode = "all"
         return mode != "crossing"
 
-    def _claim_event(self, plate: str, now: float, window: Optional[float] = None) -> bool:
-        span = self.cfg.dedupe_seconds if window is None else window
-        last = self.last_plate_event.get(plate)
+    def _claim_gate(self, plate: str, now: float) -> bool:
+        last = self.last_gate_event.get(plate)
+        if last is not None and now - last < self.cfg.dedupe_seconds:
+            return False
+        self.last_gate_event[plate] = now
+        return True
+
+    def _claim_activity(self, plate: str, now: float) -> bool:
+        span = max(self.cfg.dedupe_seconds, self.FALLBACK_DEDUPE_SECONDS)
+        last = self.last_activity.get(plate)
         if last is not None and now - last < span:
             return False
-        self.last_plate_event[plate] = now
+        self.last_activity[plate] = now
         return True
 
     def _update_track(
@@ -675,7 +685,9 @@ class Tracker:
         track.last_seen = now
         track.ground = float(box[3])
         track.history.append((now, track.ground))
-        while track.history and now - track.history[0][0] > 6.0:
+        # Keep a longer window so a car that is only sampled every few seconds
+        # can still be recognised as stationary.
+        while track.history and now - track.history[0][0] > 15.0:
             track.history.popleft()
 
         if plate:
@@ -698,8 +710,8 @@ class Tracker:
         if track.pending:
             best, count = track.votes.most_common(1)[0] if track.votes else ("", 0)
             if count >= self.cfg.votes and best:
-                if self._allowed(best) and self._claim_event(best, now):
-                    track.sent = True
+                if self._allowed(best) and self._claim_gate(best, now):
+                    track.gate_sent = True
                     self.on_event(best, track.pending, track.confidence.get(best, 0.0), track, frame)
                 track.pending = None
                 track.votes.clear()
@@ -709,6 +721,26 @@ class Tracker:
                     track.unknown_logged = True
                 track.pending = None
                 track.votes.clear()
+
+        # Cars that stop in view stay detected, so the disappear-based fallback
+        # never fires for them. Record one "stop" while they are still there.
+        if (
+            not track.pending
+            and not track.activity_sent
+            and self._records_activity()
+            and now - track.first_seen >= 3.0
+            and len(track.votes) > 0
+        ):
+            dense = [ground for (ts, ground) in track.history if ts >= now - 2.5]
+            wide = [ground for (ts, ground) in track.history if ts >= now - 12.0]
+            dense_spread = (max(dense) - min(dense)) if len(dense) >= 3 else 10_000.0
+            wide_spread = (max(wide) - min(wide)) if len(wide) >= 2 else 10_000.0
+            if min(dense_spread, wide_spread) <= 20:
+                best, count = track.votes.most_common(1)[0]
+                if count >= self.cfg.votes and self._allowed(best) and self._claim_activity(best, now):
+                    track.activity_sent = True
+                    LOG.info("track %s is parked and stays visible", track.id)
+                    self.on_event(best, "stop", track.confidence.get(best, 0.0), track, frame)
 
     def _allowed(self, plate: str) -> bool:
         if not self.plate_cfg.pattern.fullmatch(plate):
@@ -912,6 +944,8 @@ class Service:
             pending_timeout=base.pending_timeout,
             track_max_age=base.track_max_age,
             enter_direction=profile.enter_direction,
+            record_mode=base.record_mode,
+            match_seconds=base.match_seconds,
         )
 
     def cameras_info(self) -> dict[str, Any]:

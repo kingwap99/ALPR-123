@@ -53,6 +53,9 @@ gate:
   votes: 2
   pending_timeout: 8
   track_max_age: 12
+  # How long a track may go without a detection and still be the same vehicle.
+  # Keep it at least the idle poll interval so a parked car keeps one track.
+  match_seconds: 12
   enter_direction: up
   # all = record enter/exit plus pass/stop for cars that never cross the line.
   # crossing = record enter/exit only. The web UI can switch this at runtime;
