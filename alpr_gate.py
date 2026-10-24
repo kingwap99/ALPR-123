@@ -42,6 +42,10 @@ SNAPSHOT_RE = re.compile(r"^[A-Za-z0-9._-]+\.jpg$")
 VEHICLE_LABELS = {"car", "truck", "bus"}
 ASSET_DIR = Path(__file__).with_name("assets")
 PLATE_FONT_PATH = ASSET_DIR / "fonts" / "TWPlateSans-Bold.ttf"
+# Measured on real plates: character pitch is about 0.53 x cap height, which is
+# 0.375 x the font size (cap height is 0.7 em). The separator slot is wider.
+PLATE_SLOT_RATIO = 0.375
+PLATE_SEPARATOR_RATIO = 1.35
 
 
 def now_local() -> datetime:
@@ -80,14 +84,34 @@ def draw_plate_card(image: np.ndarray, plate_text: str, font_path: Path = PLATE_
     slot_h = max(2, plate_h // 45)
     draw.rounded_rectangle((plate_w * 0.23 - slot_w / 2, inset + 3, plate_w * 0.23 + slot_w / 2, inset + 3 + slot_h), radius=slot_h, fill=(20, 26, 36, 255))
     draw.rounded_rectangle((plate_w * 0.77 - slot_w / 2, inset + 3, plate_w * 0.77 + slot_w / 2, inset + 3 + slot_h), radius=slot_h, fill=(20, 26, 36, 255))
+    # Real plates use one fixed slot per character, so a narrow glyph such as
+    # "1" sits in the same pitch as the letters. Proportional advances made the
+    # digits bunch up, so place every glyph in its own slot instead.
+    chars = list(plate_text)
     size = max(12, int(plate_h * 0.62))
     while size > 8:
         font = ImageFont.truetype(str(font_path), size)
+        slots = [size * PLATE_SLOT_RATIO * (PLATE_SEPARATOR_RATIO if c == "-" else 1.0) for c in chars]
         box = draw.textbbox((0, 0), plate_text, font=font)
-        if box[2] - box[0] <= plate_w * 0.84 and box[3] - box[1] <= plate_h * 0.60:
+        if sum(slots) <= plate_w * 0.86 and box[3] - box[1] <= plate_h * 0.60:
             break
         size -= 2
-    draw.text((plate_w / 2, plate_h * 0.55), plate_text, font=font, fill=(11, 19, 34, 255), anchor="mm")
+    cursor = plate_w / 2 - sum(slots) / 2
+    for char, slot in zip(chars, slots):
+        if char == "-":
+            # The plate separator is a small centred dot, not a full hyphen.
+            dot_w = max(3, round(size * 0.11))
+            dot_h = max(3, round(size * 0.09))
+            cx = cursor + slot / 2
+            cy = plate_h * 0.55
+            draw.rounded_rectangle(
+                (cx - dot_w / 2, cy - dot_h / 2, cx + dot_w / 2, cy + dot_h / 2),
+                radius=dot_h / 2,
+                fill=(11, 19, 34, 255),
+            )
+        else:
+            draw.text((cursor + slot / 2, plate_h * 0.55), char, font=font, fill=(11, 19, 34, 255), anchor="mm")
+        cursor += slot
     base = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)).convert("RGBA")
     base.paste(card, (margin, height - plate_h - margin), card)
     return cv2.cvtColor(np.array(base.convert("RGB")), cv2.COLOR_RGB2BGR)
