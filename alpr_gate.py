@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import cv2
 import numpy as np
@@ -130,6 +130,15 @@ def parse_retention(value: Any) -> Optional[int]:
     return None
 
 
+RECORD_MODES = ("all", "crossing")
+
+
+def parse_record_mode(value: Any) -> str:
+    """Return the event recording mode: all activity, or gate crossings only."""
+    mode = str(value or "").strip().lower()
+    return mode if mode in RECORD_MODES else "all"
+
+
 def safe_float(value: Any, default: float) -> float:
     try:
         return float(value)
@@ -170,6 +179,7 @@ class GateCfg:
     pending_timeout: float
     track_max_age: float
     enter_direction: str = "up"
+    record_mode: str = "all"
 
 
 @dataclass
@@ -330,6 +340,7 @@ def load_config(path: Path) -> Config:
             pending_timeout=max(2.0, safe_float(gate.get("pending_timeout"), 8.0)),
             track_max_age=max(2.0, safe_float(gate.get("track_max_age"), 12.0)),
             enter_direction=active_profile.enter_direction,
+            record_mode=parse_record_mode(gate.get("record_mode")),
         ),
         cameras=profiles,
         active_camera=active_camera,
@@ -532,10 +543,17 @@ class Tracker:
     # per appearance, so the history stays a record of cars rather than frames.
     FALLBACK_DEDUPE_SECONDS = 300.0
 
-    def __init__(self, cfg: GateCfg, plate_cfg: PlateCfg, on_event) -> None:
+    def __init__(
+        self,
+        cfg: GateCfg,
+        plate_cfg: PlateCfg,
+        on_event,
+        record_mode: Optional[Callable[[], str]] = None,
+    ) -> None:
         self.cfg = cfg
         self.plate_cfg = plate_cfg
         self.on_event = on_event
+        self.record_mode = record_mode
         self.tracks: dict[int, Track] = {}
         self.next_id = 1
         self.last_plate_event: dict[str, float] = {}
@@ -603,7 +621,13 @@ class Tracker:
             # A confirmed plate that never crossed the gate line is still worth
             # recording: cars that pass by or stop short of the line would
             # otherwise never appear in the history.
-            if track.pending is None and not track.sent and idle >= 2.5 and track.votes:
+            if (
+                track.pending is None
+                and not track.sent
+                and idle >= 2.5
+                and track.votes
+                and self._records_activity()
+            ):
                 best, count = track.votes.most_common(1)[0]
                 window = max(self.cfg.dedupe_seconds, self.FALLBACK_DEDUPE_SECONDS)
                 if count >= self.cfg.votes and best and self._allowed(best) and self._claim_event(best, now, window):
@@ -620,6 +644,14 @@ class Tracker:
         if len(recent) >= 2 and (max(recent) - min(recent)) <= 25:
             return "stop"
         return "pass"
+
+    def _records_activity(self) -> bool:
+        """Only log pass/stop records in the "all" mode."""
+        try:
+            mode = self.record_mode() if self.record_mode else self.cfg.record_mode
+        except Exception:
+            mode = "all"
+        return mode != "crossing"
 
     def _claim_event(self, plate: str, now: float, window: Optional[float] = None) -> bool:
         span = self.cfg.dedupe_seconds if window is None else window
@@ -783,6 +815,15 @@ class Service:
             self.retain_days = parse_retention(saved_retention.get("days")) or self.retain_days
         except Exception:
             pass
+        self.settings_path = self.data_dir / "settings.json"
+        self.record_mode = parse_record_mode(cfg.gate.record_mode)
+        try:
+            saved_settings = json.loads(self.settings_path.read_text())
+            saved_mode = saved_settings.get("record_mode")
+            if saved_mode:
+                self.record_mode = parse_record_mode(saved_mode)
+        except Exception:
+            pass
         self.store = Store(self.data_dir / "events.db")
         self.integration_path = self.data_dir / "integration.json"
         self.webhook_url = ""
@@ -840,7 +881,7 @@ class Service:
 
     def start(self) -> None:
         self._load_models()
-        self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event)
+        self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode)
         self.capture.start()
         self.thread = threading.Thread(target=self._run, name="alpr-worker", daemon=True)
         self.thread.start()
@@ -909,7 +950,7 @@ class Service:
             self.gate_cfg = self._gate_for(self.profile)
             self.capture = Capture(self.camera_cfg)
             self.motion = MotionGate(self.cfg.motion)
-            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event)
+            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode)
             with self.lock:
                 self.status.update(
                     {
@@ -950,7 +991,7 @@ class Service:
                 self.profile = profile
                 self.gate_cfg = self._gate_for(profile)
                 self.motion = MotionGate(self.cfg.motion)
-                self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event)
+                self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode)
         LOG.info("roi for %s set to %s", camera_id, parsed)
         return True
 
@@ -1029,7 +1070,7 @@ class Service:
 
     def _process(self, frame: np.ndarray, now: float) -> None:
         if self.tracker is None:
-            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event)
+            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode)
         detections = self.vehicle_detector.predict(frame)
         vehicles: list[tuple[float, tuple[int, int, int, int], Any]] = []
         height, width = frame.shape[:2]
@@ -1187,6 +1228,22 @@ class Service:
         self._prune()
         return value
 
+    def set_record_mode(self, mode: Any) -> str:
+        value = str(mode or "").strip().lower()
+        if value not in RECORD_MODES:
+            raise ValueError("record mode must be one of: " + ", ".join(RECORD_MODES))
+        self.record_mode = value
+        try:
+            state: dict[str, Any] = {}
+            if self.settings_path.exists():
+                state = json.loads(self.settings_path.read_text())
+            state["record_mode"] = value
+            self.settings_path.write_text(json.dumps(state))
+        except Exception as exc:
+            LOG.warning("could not persist record mode: %s", exc)
+        LOG.info("event recording mode set to %s", value)
+        return value
+
     def _prune(self) -> None:
         try:
             cutoff = time.time() - self.retain_days * 86400
@@ -1218,6 +1275,7 @@ class Service:
                     data["last_frame_age"] = None
             data["events_today"] = self.store.count_today()
             data["retain_days"] = self.retain_days
+            data["record_mode"] = self.record_mode
         return data
 
     def healthy(self) -> bool:
@@ -1256,6 +1314,7 @@ def create_app(service: Service) -> FastAPI:
             .replace("__CAMERA_ID__", profile.id)
             .replace("__CAMERA_LABEL__", profile.label)
             .replace("__RETAIN_DAYS__", str(service.retain_days))
+            .replace("__RECORD_MODE__", service.record_mode)
         )
 
     @app.get("/favicon.ico")
@@ -1292,7 +1351,16 @@ def create_app(service: Service) -> FastAPI:
     @app.get("/api/settings")
     def get_settings(request: Request):
         svc: Service = request.app.state.service
-        return {"retain_days": svc.retain_days}
+        return {"retain_days": svc.retain_days, "record_mode": svc.record_mode}
+
+    @app.post("/api/settings/record-mode")
+    def set_record_mode(payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        try:
+            mode = svc.set_record_mode(payload.get("mode"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"record_mode": mode}
 
     @app.post("/api/settings/retention")
     def set_retention(payload: dict[str, Any], request: Request):

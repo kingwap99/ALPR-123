@@ -54,6 +54,10 @@ gate:
   pending_timeout: 8
   track_max_age: 12
   enter_direction: up
+  # all = record enter/exit plus pass/stop for cars that never cross the line.
+  # crossing = record enter/exit only. The web UI can switch this at runtime;
+  # the chosen value is stored in settings.json inside the data directory.
+  record_mode: all
 
 motion:
   diff_threshold: 2.5

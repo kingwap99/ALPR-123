@@ -114,7 +114,7 @@
     }
   </style>
 </head>
-<body data-live-url="__LIVE_URL__" data-camera-id="__CAMERA_ID__">
+<body data-live-url="__LIVE_URL__" data-camera-id="__CAMERA_ID__" data-record-mode="__RECORD_MODE__">
   <div class="wrap">
     <header>
       <div class="brand">
@@ -126,6 +126,7 @@
       </div>
       <div class="head-right">
         <button class="btn" id="roiBtn">偵測範圍</button>
+        <div class="cam-picker"><span>記錄</span><select id="recordMode" aria-label="記錄模式"><option value="all">全部經過</option><option value="crossing">只看跨越</option></select></div>
         <div class="cam-picker"><span>監測鏡頭</span><select id="cameraSelect" aria-label="監測鏡頭" autocomplete="off"></select></div>
         <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">連線中…</span></div>
       </div>
@@ -536,6 +537,31 @@
     });
     $('retentionSave').onclick = async () => {
       try { await saveRetention(); } catch (e) { $('statusText').textContent = '保留天數儲存失敗'; }
+    };
+
+    const initialMode = document.body.dataset.recordMode === 'crossing' ? 'crossing' : 'all';
+    $('recordMode').value = initialMode;
+    $('recordMode').dataset.previous = initialMode;
+
+    async function saveRecordMode(mode) {
+      const r = await fetch('/api/settings/record-mode', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({mode}),
+      });
+      if (!r.ok) throw new Error('record mode save failed');
+      const data = await r.json();
+      $('recordMode').value = data.record_mode;
+      $('recordMode').dataset.previous = data.record_mode;
+      $('statusText').textContent = data.record_mode === 'all' ? '記錄：全部經過' : '記錄：只看跨越';
+    }
+
+    $('recordMode').onchange = async (e) => {
+      const previous = e.target.dataset.previous || 'all';
+      try {
+        await saveRecordMode(e.target.value);
+      } catch (err) {
+        e.target.value = previous;
+        $('statusText').textContent = '記錄模式儲存失敗';
+      }
     };
 
     refreshStatus();
