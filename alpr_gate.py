@@ -528,6 +528,10 @@ class Track:
 
 
 class Tracker:
+    # A car that merely drives by or stops is logged once per window, not once
+    # per appearance, so the history stays a record of cars rather than frames.
+    FALLBACK_DEDUPE_SECONDS = 300.0
+
     def __init__(self, cfg: GateCfg, plate_cfg: PlateCfg, on_event) -> None:
         self.cfg = cfg
         self.plate_cfg = plate_cfg
@@ -601,7 +605,8 @@ class Tracker:
             # otherwise never appear in the history.
             if track.pending is None and not track.sent and idle >= 2.5 and track.votes:
                 best, count = track.votes.most_common(1)[0]
-                if count >= self.cfg.votes and best and self._allowed(best) and self._claim_event(best, now):
+                window = max(self.cfg.dedupe_seconds, self.FALLBACK_DEDUPE_SECONDS)
+                if count >= self.cfg.votes and best and self._allowed(best) and self._claim_event(best, now, window):
                     direction = self._classify(track)
                     track.sent = True
                     LOG.info("track %s logged as %s without a gate crossing", track.id, direction)
@@ -616,9 +621,10 @@ class Tracker:
             return "stop"
         return "pass"
 
-    def _claim_event(self, plate: str, now: float) -> bool:
+    def _claim_event(self, plate: str, now: float, window: Optional[float] = None) -> bool:
+        span = self.cfg.dedupe_seconds if window is None else window
         last = self.last_plate_event.get(plate)
-        if last is not None and now - last < self.cfg.dedupe_seconds:
+        if last is not None and now - last < span:
             return False
         self.last_plate_event[plate] = now
         return True
