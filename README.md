@@ -23,6 +23,7 @@ The project does not require MQTT, an HA add-on, or a cloud service.
 - Each saved snapshot draws a small reference plate using the bundled TW Plate Sans font, so the OCR result can be compared with the official plate lettering.
 - Built-in web UI: live camera, last event, searchable history, image modal, and ROI editor.
 - Home Assistant webhook integration with a sample automation, helpers, and webpage panel.
+- Cat sightings are recorded as a clip from the moment they enter the view until they leave.
 - Native Home Assistant custom integration with config flow, sensors, health entities, and an `alpr_gate_event` bus event.
 - launchd template for macOS and systemd template for Linux.
 

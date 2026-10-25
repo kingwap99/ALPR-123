@@ -177,6 +177,8 @@ Plate detections that are too small are discarded: `models.min_plate_px` (defaul
 
 When a car leaves between two frames it may never produce the single-step crossing the gate logic needs. On track expiry the tracker compares the first and last position; if the vehicle clearly moved from one side of the line to the other (more than twice `margin`), the `enter`/`exit` crossing is still recorded instead of leaving only a `stop`.
 
+Cats are recorded as video. With `animals.cat` enabled, seeing a cat starts a recording from `cameras.*.clip_url` (point it at the go2rtc 15 fps stream); the H.264 stream is copied without re-encoding. Recording stops after `cat_leave_seconds` without a cat, capped by `cat_clip_max_seconds`. Each visit stores one `cat` event, an annotated still, and an MP4; the history can filter by 貓咪 and the modal plays the clip. Clips follow the same retention as snapshots.
+
 Click **歷史截圖保留 … 天** under the page title to change how long snapshots and history rows are kept (1–365 days). Applying a value prunes older entries immediately, and the hourly cleanup keeps using it. The value is stored in `retention.json` next to the database, so it survives restarts; `retain_days` in `config.yaml` is only the default for a fresh install.
 
 ## 8. Service management

@@ -70,6 +70,7 @@
     .badge.exit { background: rgba(255,180,94,.13); color: var(--exit); border: 1px solid rgba(255,180,94,.28); }
     .badge.pass { background: rgba(106,169,255,.13); color: var(--accent); border: 1px solid rgba(106,169,255,.3); }
     .badge.stop { background: rgba(176,140,255,.13); color: var(--test); border: 1px solid rgba(176,140,255,.3); }
+    .badge.cat { background: rgba(255,165,0,.14); color: #ffb45e; border: 1px solid rgba(255,180,94,.32); }
     .badge.test { background: rgba(176,140,255,.13); color: var(--test); border: 1px solid rgba(176,140,255,.3); }
     .last-img { border-radius: 12px; overflow: hidden; background: #05080f; border: 1px solid var(--line); }
     .last-img img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; }
@@ -85,6 +86,8 @@
     .event { text-align: left; background: var(--panel-2); border: 1px solid var(--line); border-radius: 13px; overflow: hidden; cursor: pointer; transition: transform .15s ease, border-color .15s ease; padding: 0; color: inherit; }
     .event:hover { transform: translateY(-2px); border-color: #3f5172; }
     .event img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; background: #05080f; }
+    .event-media { position: relative; }
+    .event-media .play { position: absolute; right: 8px; bottom: 8px; background: rgba(2,5,10,.72); border: 1px solid rgba(255,255,255,.22); color: #eaf0ff; border-radius: 999px; padding: 3px 9px; font-size: 11px; letter-spacing: .02em; }
     .event-body { padding: 11px 12px 12px; }
     .event-plate { font-size: 21px; font-weight: 750; letter-spacing: .06em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .event-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 7px; color: var(--muted); font-size: 12px; }
@@ -155,7 +158,7 @@
         <h2>歷史進出 <span class="muted" id="eventCount" style="font-weight:400;font-size:12px"></span></h2>
         <div class="filters">
           <input id="q" type="search" placeholder="搜尋車牌" autocomplete="off">
-          <select id="direction"><option value="">全部</option><option value="enter">進入</option><option value="exit">離開</option><option value="pass">經過</option><option value="stop">暫停</option></select>
+          <select id="direction"><option value="">全部</option><option value="enter">進入</option><option value="exit">離開</option><option value="pass">經過</option><option value="stop">暫停</option><option value="cat">貓咪</option></select>
           <input id="day" type="date">
           <button class="btn" id="refresh">重新整理</button>
         </div>
@@ -169,6 +172,7 @@
     <div class="modal-box">
       <button class="modal-close" id="modalClose" aria-label="關閉">×</button>
       <img id="modalImage" alt="車牌截圖">
+      <video id="modalVideo" controls playsinline style="display:none;width:100%;background:#05080f"></video>
       <div class="modal-info">
         <div><strong id="modalPlate">—</strong><div class="row" id="modalMeta" style="margin-top:7px"></div></div>
         <a id="modalRaw" target="_blank" rel="noreferrer">開啟原圖</a>
@@ -303,7 +307,7 @@
     }
 
     function badge(direction, test) {
-      const labels = { enter: ['enter', '進入'], exit: ['exit', '離開'], pass: ['pass', '經過'], stop: ['stop', '暫停'] };
+      const labels = { enter: ['enter', '進入'], exit: ['exit', '離開'], pass: ['pass', '經過'], stop: ['stop', '暫停'], cat: ['cat', '貓咪'] };
       const [cls, text] = labels[direction] || ['exit', esc(direction || '—')];
       const d = `<span class="badge ${cls}">${text}</span>`;
       return d + (test ? ' <span class="badge test">TEST</span>' : '');
@@ -346,7 +350,10 @@
         el.type = 'button';
         el.onclick = () => openModal(ev);
         el.innerHTML = `
-          ${ev.snapshot_url ? `<img loading="lazy" src="${esc(ev.snapshot_url)}" alt="${esc(ev.plate)}">` : '<div style="aspect-ratio:4/3;background:#05080f"></div>'}
+          <div class="event-media">
+            ${ev.snapshot_url ? `<img loading="lazy" src="${esc(ev.snapshot_url)}" alt="${esc(ev.plate)}">` : '<div style="aspect-ratio:4/3;background:#05080f"></div>'}
+            ${ev.clip_url ? '<span class="play">▶ 影片</span>' : ''}
+          </div>
           <div class="event-body">
             <div class="event-plate">${esc(fmtPlate(ev.plate))}</div>
             <div class="event-meta"><span>${badge(ev.direction, ev.test)}</span><span>${esc(fmtTime(ev.ts))}</span></div>
@@ -376,14 +383,36 @@
     function openModal(ev) {
       $('modalPlate').textContent = fmtPlate(ev.plate) || '—';
       $('modalMeta').innerHTML = `${badge(ev.direction, ev.test)} <span>${esc(fmtTime(ev.ts))}</span> <span>信心 ${(Number(ev.confidence) * 100).toFixed(1)}%</span>`;
-      $('modalImage').src = ev.snapshot_url || '';
-      $('modalRaw').href = ev.snapshot_url || '#';
+      const img = $('modalImage');
+      const video = $('modalVideo');
+      if (ev.clip_url) {
+        video.src = ev.clip_url;
+        video.style.display = 'block';
+        img.style.display = 'none';
+        video.currentTime = 0;
+        const playing = video.play();
+        if (playing && playing.catch) playing.catch(() => {});
+        $('modalRaw').textContent = '開啟影片';
+      } else {
+        video.pause();
+        video.removeAttribute('src');
+        video.style.display = 'none';
+        img.src = ev.snapshot_url || '';
+        img.style.display = '';
+        $('modalRaw').textContent = '開啟原圖';
+      }
+      $('modalRaw').href = ev.clip_url || ev.snapshot_url || '#';
       $('modal').classList.add('open');
     }
 
-    $('modalClose').onclick = () => $('modal').classList.remove('open');
-    $('modal').onclick = (e) => { if (e.target === $('modal')) $('modal').classList.remove('open'); };
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('modal').classList.remove('open'); });
+    function closeModal() {
+      $('modal').classList.remove('open');
+      const video = $('modalVideo');
+      video.pause();
+    }
+    $('modalClose').onclick = closeModal;
+    $('modal').onclick = (e) => { if (e.target === $('modal')) closeModal(); };
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
     $('refresh').onclick = loadEvents;
     $('q').addEventListener('input', () => { clearTimeout(window._q); window._q = setTimeout(loadEvents, 250); });
     $('direction').onchange = loadEvents;

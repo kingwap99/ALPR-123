@@ -39,7 +39,9 @@ from PIL import Image, ImageDraw, ImageFont
 LOG = logging.getLogger("alpr-gate")
 NON_ALNUM = re.compile(r"[^A-Z0-9]")
 SNAPSHOT_RE = re.compile(r"^[A-Za-z0-9._-]+\.jpg$")
+CLIP_RE = re.compile(r"^[A-Za-z0-9._-]+\.mp4$")
 VEHICLE_LABELS = {"car", "truck", "bus"}
+EVENT_DIRECTIONS = ("enter", "exit", "pass", "stop", "cat")
 ASSET_DIR = Path(__file__).with_name("assets")
 PLATE_FONT_PATH = ASSET_DIR / "fonts" / "TWPlateSans-Bold.ttf"
 # Measured on real plates: character pitch is about 0.53 x cap height, which is
@@ -220,12 +222,22 @@ class CameraProfile:
     enter_direction: str
     live_url: str
     roi: Optional[tuple[float, float, float, float]] = None
+    clip_url: Optional[str] = None
 
 
 @dataclass
 class MotionCfg:
     diff_threshold: float
     idle_poll_seconds: float
+
+
+@dataclass
+class AnimalCfg:
+    cat: bool
+    cat_conf: float
+    cat_dedupe_seconds: float
+    cat_leave_seconds: float
+    cat_clip_max_seconds: float
 
 
 @dataclass
@@ -263,6 +275,7 @@ class Config:
     cameras: dict[str, CameraProfile]
     active_camera: str
     motion: MotionCfg
+    animals: AnimalCfg
     ha: HaCfg
     storage: StorageCfg
     api: ApiCfg
@@ -282,6 +295,7 @@ def load_config(path: Path) -> Config:
     storage = raw.get("storage") or {}
     api = raw.get("api") or {}
     plates = raw.get("plates") or {}
+    animals = raw.get("animals") or {}
 
     rtsp_url = str(cam.get("rtsp_url") or "").strip()
     if not rtsp_url.startswith("rtsp://"):
@@ -329,6 +343,7 @@ def load_config(path: Path) -> Config:
                 enter_direction=str(item.get("enter_direction") or gate.get("enter_direction") or "up").lower(),
                 live_url=str(item.get("live_url") or base_live_url),
                 roi=parse_roi(item.get("roi")),
+                clip_url=str(item.get("clip_url") or "").strip() or None,
             )
     if not profiles:
         camera_id = str(cam.get("name") or "garage")
@@ -342,6 +357,7 @@ def load_config(path: Path) -> Config:
             enter_direction=str(gate.get("enter_direction") or "up").lower(),
             live_url=base_live_url,
             roi=parse_roi(raw.get("roi")),
+            clip_url=str(cam.get("clip_url") or "").strip() or None,
         )
     active_camera = str(raw.get("active_camera") or next(iter(profiles)))
     if active_camera not in profiles:
@@ -377,6 +393,13 @@ def load_config(path: Path) -> Config:
         motion=MotionCfg(
             diff_threshold=max(0.2, safe_float(motion.get("diff_threshold"), 2.5)),
             idle_poll_seconds=max(2.0, safe_float(motion.get("idle_poll_seconds"), 8.0)),
+        ),
+        animals=AnimalCfg(
+            cat=bool(animals.get("cat", True)),
+            cat_conf=max(0.1, safe_float(animals.get("cat_conf"), 0.45)),
+            cat_dedupe_seconds=max(0.0, safe_float(animals.get("cat_dedupe_seconds"), 600.0)),
+            cat_leave_seconds=max(1.0, safe_float(animals.get("cat_leave_seconds"), 4.0)),
+            cat_clip_max_seconds=max(10.0, safe_float(animals.get("cat_clip_max_seconds"), 180.0)),
         ),
         ha=HaCfg(
             webhook_url=str(ha.get("webhook_url") or "").strip(),
@@ -511,6 +534,62 @@ class Capture:
         try:
             proc.terminate()
             proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+class ClipRecorder:
+    """Record one clip by copying the stream, without re-encoding."""
+
+    def __init__(self, ffmpeg: str, url: str, path: Path, max_seconds: float) -> None:
+        self.ffmpeg = ffmpeg
+        self.url = url
+        self.path = path
+        self.max_seconds = max_seconds
+        self.proc: Optional[subprocess.Popen[bytes]] = None
+
+    def start(self) -> bool:
+        try:
+            self.proc = subprocess.Popen(
+                [
+                    self.ffmpeg,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-nostdin",
+                    "-rtsp_transport",
+                    "tcp",
+                    "-i",
+                    self.url,
+                    "-t",
+                    f"{self.max_seconds:.0f}",
+                    "-c",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    "-y",
+                    str(self.path),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception as exc:
+            LOG.warning("clip recorder failed to start: %s", exc)
+            self.proc = None
+            return False
+
+    def stop(self) -> None:
+        proc = self.proc
+        self.proc = None
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=6)
         except Exception:
             try:
                 proc.kill()
@@ -867,7 +946,7 @@ class Store:
         if plate:
             where.append("plate LIKE ?")
             params.append(f"%{plate}%")
-        if direction in {"enter", "exit"}:
+        if direction in EVENT_DIRECTIONS:
             where.append("direction = ?")
             params.append(direction)
         if day:
@@ -896,6 +975,8 @@ class Store:
                     "confidence": row[4],
                     "snapshot": row[5],
                     "snapshot_url": f"/snapshots/{row[5]}" if row[5] else "",
+                    "clip": payload.get("clip") or "",
+                    "clip_url": f"/clips/{payload['clip']}" if payload.get("clip") else "",
                     "test": bool(payload.get("test")),
                 }
             )
@@ -915,6 +996,8 @@ class Service:
         self.data_dir = cfg.storage.data_dir
         self.snapshot_dir = self.data_dir / "snapshots"
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        self.clip_dir = self.data_dir / "clips"
+        self.clip_dir.mkdir(parents=True, exist_ok=True)
         self.retention_path = self.data_dir / "retention.json"
         self.retain_days = parse_retention(cfg.storage.retain_days) or 7
         try:
@@ -985,6 +1068,14 @@ class Service:
         self.tracker: Optional[Tracker] = None
         self.thread: Optional[threading.Thread] = None
         self.last_prune = 0.0
+        self.last_cat_at = 0.0
+        self.last_cat_seen = 0.0
+        self.clip: Optional[ClipRecorder] = None
+        self.clip_started = 0.0
+        self.clip_name = ""
+        self.clip_poster = ""
+        self.clip_conf = 0.0
+        self.clip_ts = ""
 
     def start(self) -> None:
         self._load_models()
@@ -1160,6 +1251,7 @@ class Service:
                     self.status["motion_diff"] = round(diff, 2)
                 if should:
                     self._process(frame, now)
+                self._maybe_finish_clip(now)
                 if now - self.last_prune > 3600:
                     self.last_prune = now
                     self._prune()
@@ -1197,6 +1289,29 @@ class Service:
             area = float((x2 - x1) * (y2 - y1))
             vehicles.append((area, (x1, y1, x2, y2), det))
         vehicles.sort(reverse=True, key=lambda item: item[0])
+
+        if self.cfg.animals.cat:
+            cats: list[tuple[float, tuple[int, int, int, int], float]] = []
+            for det in detections:
+                if str(det.label).lower() != "cat":
+                    continue
+                conf = float(det.confidence)
+                if conf < self.cfg.animals.cat_conf:
+                    continue
+                box = det.bounding_box
+                x1 = max(0, int(box.x1))
+                y1 = max(0, int(box.y1))
+                x2 = min(width, int(box.x2))
+                y2 = min(height, int(box.y2))
+                if x2 - x1 < 30 or y2 - y1 < 30:
+                    continue
+                cats.append((conf, (x1, y1, x2, y2), conf))
+            if cats:
+                cats.sort(reverse=True, key=lambda item: item[0])
+                conf, box, _ = cats[0]
+                self.last_cat_seen = now
+                if self.clip is None and now - self.last_cat_at >= self.cfg.animals.cat_dedupe_seconds:
+                    self._start_cat_clip(frame, box, conf, now)
 
         results: list[tuple[tuple[int, int, int, int], Optional[str], float]] = []
         for _, (x1, y1, x2, y2), _det in vehicles[: self.cfg.models.max_vehicles]:
@@ -1269,6 +1384,121 @@ class Service:
             self.status["events_today"] = self.store.count_today() + 1
         self.store.add(seen_at, plate, direction, confidence, snapshot.name if snapshot else "", payload)
         LOG.info("event %s %s conf=%.3f track=%s", direction, plate, confidence, track.id)
+        self._post_webhook(payload)
+
+    def _annotate_cat(self, frame: np.ndarray, box: tuple[int, int, int, int], confidence: float) -> np.ndarray:
+        image = frame.copy()
+        x1, y1, x2, y2 = box
+        colour = (0, 165, 255)
+        cv2.rectangle(image, (x1, y1), (x2, y2), colour, 3)
+        cv2.putText(
+            image,
+            f"CAT {confidence:.2f}",
+            (max(8, x1), max(28, y1 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            colour,
+            2,
+        )
+        cv2.line(image, (0, self.gate_cfg.line_y), (image.shape[1], self.gate_cfg.line_y), (80, 80, 255), 2)
+        return image
+
+    def _start_cat_clip(
+        self,
+        frame: np.ndarray,
+        box: tuple[int, int, int, int],
+        confidence: float,
+        now: float,
+    ) -> None:
+        """Start recording when a cat enters; stop when it leaves."""
+        ts = now_local().strftime("%Y%m%d-%H%M%S")
+        poster = f"{ts}-cat-{int(round(confidence * 100)):03d}.jpg"
+        try:
+            path = self.snapshot_dir / poster
+            cv2.imwrite(str(path), self._annotate_cat(frame, box, confidence), [cv2.IMWRITE_JPEG_QUALITY, 86])
+            self.last_snapshot_path = path
+        except Exception as exc:
+            LOG.warning("cat poster failed: %s", exc)
+            poster = ""
+
+        clip_url = (self.profile.clip_url or "").strip()
+        if not clip_url:
+            self.last_cat_at = now
+            LOG.info("cat seen; no clip_url configured, recording a still only")
+            self._store_cat_event(iso_now(), confidence, poster, "")
+            return
+
+        name = f"{ts}-cat.mp4"
+        recorder = ClipRecorder(
+            self.camera_cfg.ffmpeg,
+            clip_url,
+            self.clip_dir / name,
+            self.cfg.animals.cat_clip_max_seconds,
+        )
+        if not recorder.start():
+            self.last_cat_at = now
+            self._store_cat_event(iso_now(), confidence, poster, "")
+            return
+        self.clip = recorder
+        self.clip_started = now
+        self.clip_name = name
+        self.clip_poster = poster
+        self.clip_conf = confidence
+        self.clip_ts = iso_now()
+        LOG.info("cat clip started: %s", name)
+
+    def _maybe_finish_clip(self, now: float) -> None:
+        if self.clip is None:
+            return
+        if now - self.last_cat_seen > self.cfg.animals.cat_leave_seconds:
+            self._finish_clip(now)
+        elif now - self.clip_started > self.cfg.animals.cat_clip_max_seconds:
+            self._finish_clip(now)
+
+    def _finish_clip(self, now: float) -> None:
+        recorder, self.clip = self.clip, None
+        if recorder is not None:
+            recorder.stop()
+        name = self.clip_name
+        path = self.clip_dir / name if name else None
+        duration = now - self.clip_started
+        if path is not None and path.exists() and path.stat().st_size > 4096:
+            LOG.info("cat clip saved: %s (%.1f s)", name, duration)
+            self._store_cat_event(self.clip_ts or iso_now(), self.clip_conf, self.clip_poster, name)
+        else:
+            if path is not None:
+                path.unlink(missing_ok=True)
+            LOG.warning("cat clip produced no usable file; keeping the still only")
+            self._store_cat_event(self.clip_ts or iso_now(), self.clip_conf, self.clip_poster, "")
+        self.last_cat_at = now
+        self.clip_name = ""
+        self.clip_poster = ""
+        self.clip_conf = 0.0
+        self.clip_ts = ""
+
+    def _store_cat_event(self, seen_at: str, confidence: float, poster: str, clip: str) -> None:
+        snapshot_url = ""
+        if poster and self.cfg.ha.public_base_url:
+            snapshot_url = f"{self.cfg.ha.public_base_url}/snapshots/{poster}"
+        clip_url = ""
+        if clip and self.cfg.ha.public_base_url:
+            clip_url = f"{self.cfg.ha.public_base_url}/clips/{clip}"
+        payload = {
+            "event": "cat",
+            "plate": "CAT",
+            "confidence": round(confidence, 4),
+            "camera": self.camera_cfg.name,
+            "snapshot": snapshot_url,
+            "clip": clip,
+            "clip_url": clip_url,
+            "seen_at": seen_at,
+        }
+        with self.lock:
+            self.status["last_event"] = "cat"
+            self.status["last_seen"] = seen_at
+            self.status["last_snapshot"] = snapshot_url or None
+        self.store.add(seen_at, "CAT", "cat", confidence, poster, payload)
+        LOG.info("event cat conf=%.3f clip=%s", confidence, clip or "none")
         self._post_webhook(payload)
 
     def _save_snapshot(
@@ -1368,6 +1598,9 @@ class Service:
             for path in self.snapshot_dir.glob("*.jpg"):
                 if path.stat().st_mtime < cutoff and path != self.last_snapshot_path:
                     path.unlink(missing_ok=True)
+            for path in self.clip_dir.glob("*.mp4"):
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
             self.store.prune(self.retain_days)
             LOG.info("pruned snapshots older than %s days", self.retain_days)
         except Exception as exc:
@@ -1375,6 +1608,11 @@ class Service:
 
     def stop(self) -> None:
         self.stop_event.set()
+        if self.clip is not None:
+            try:
+                self._finish_clip(time.monotonic())
+            except Exception as exc:
+                LOG.warning("could not finish cat clip: %s", exc)
         self.capture.stop()
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
@@ -1514,7 +1752,7 @@ def create_app(service: Service) -> FastAPI:
         limit = max(1, min(200, limit))
         offset = max(0, offset)
         plate = normalize_plate(plate)[:16]
-        direction = direction if direction in {"enter", "exit"} else ""
+        direction = direction if direction in EVENT_DIRECTIONS else ""
         day = date if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) else ""
         rows, total = svc.store.list_events(limit=limit, offset=offset, plate=plate, direction=direction, day=day)
         return {"events": rows, "total": total, "server_time": iso_now()}
@@ -1545,6 +1783,16 @@ def create_app(service: Service) -> FastAPI:
         if not path.is_file():
             raise HTTPException(status_code=404, detail="not found")
         return FileResponse(path, media_type="image/jpeg")
+
+    @app.get("/clips/{name}")
+    async def clip(name: str, request: Request):
+        svc: Service = request.app.state.service
+        if not CLIP_RE.fullmatch(name):
+            raise HTTPException(status_code=400, detail="bad name")
+        path = svc.clip_dir / name
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(path, media_type="video/mp4")
 
     return app
 
