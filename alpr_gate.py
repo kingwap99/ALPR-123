@@ -566,9 +566,10 @@ class Track:
 
 
 class Tracker:
-    # A car that merely drives by or stops is logged once per window, not once
-    # per appearance, so the history stays a record of cars rather than frames.
-    FALLBACK_DEDUPE_SECONDS = 300.0
+    # One activity record per visit. A visit ends when the plate has not been
+    # seen for this long, so a car parked overnight is logged once even if its
+    # track is recreated by a stream hiccup.
+    ACTIVITY_VISIT_SECONDS = 600.0
 
     def __init__(
         self,
@@ -584,7 +585,7 @@ class Tracker:
         self.tracks: dict[int, Track] = {}
         self.next_id = 1
         self.last_gate_event: dict[str, float] = {}
-        self.last_activity: dict[str, float] = {}
+        self.visits: dict[str, dict[str, Any]] = {}
 
     @staticmethod
     def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
@@ -626,6 +627,9 @@ class Tracker:
         detections: list[tuple[tuple[int, int, int, int], Optional[str], float]],
         now: float,
     ) -> None:
+        for plate, visit in list(self.visits.items()):
+            if now - float(visit.get("last_seen") or 0.0) > self.ACTIVITY_VISIT_SECONDS:
+                self.visits.pop(plate, None)
         used: set[int] = set()
         for box, plate, conf in detections:
             track = self._match(box, now)
@@ -657,7 +661,7 @@ class Tracker:
                 and self._records_activity()
             ):
                 best, count = track.votes.most_common(1)[0]
-                if count >= self.cfg.votes and best and self._allowed(best) and self._claim_activity(best, now):
+                if count >= self.cfg.votes and best and self._allowed(best) and self._log_activity(best):
                     direction = self._classify(track)
                     track.activity_sent = True
                     LOG.info("track %s logged as %s without a gate crossing", track.id, direction)
@@ -687,12 +691,22 @@ class Tracker:
         self.last_gate_event[plate] = now
         return True
 
-    def _claim_activity(self, plate: str, now: float) -> bool:
-        span = max(self.cfg.dedupe_seconds, self.FALLBACK_DEDUPE_SECONDS)
-        last = self.last_activity.get(plate)
-        if last is not None and now - last < span:
+    def _touch_visit(self, plate: str, now: float) -> None:
+        visit = self.visits.get(plate)
+        if visit is None:
+            visit = {"last_seen": now, "activity": False}
+            self.visits[plate] = visit
+        visit["last_seen"] = now
+
+    def _log_activity(self, plate: str) -> bool:
+        """Return True when this visit has not logged an activity record yet."""
+        visit = self.visits.get(plate)
+        if visit is None:
+            visit = {"last_seen": 0.0, "activity": False}
+            self.visits[plate] = visit
+        if visit.get("activity"):
             return False
-        self.last_activity[plate] = now
+        visit["activity"] = True
         return True
 
     def _update_track(
@@ -717,6 +731,7 @@ class Tracker:
         if plate:
             track.votes[plate] += 1
             track.confidence[plate] = max(track.confidence.get(plate, 0.0), conf)
+            self._touch_visit(plate, now)
 
         if now - track.first_seen >= self.cfg.min_track_seconds:
             high = self.cfg.line_y + self.cfg.margin
@@ -761,7 +776,7 @@ class Tracker:
             wide_spread = (max(wide) - min(wide)) if len(wide) >= 2 else 10_000.0
             if min(dense_spread, wide_spread) <= 20:
                 best, count = track.votes.most_common(1)[0]
-                if count >= self.cfg.votes and self._allowed(best) and self._claim_activity(best, now):
+                if count >= self.cfg.votes and self._allowed(best) and self._log_activity(best):
                     track.activity_sent = True
                     LOG.info("track %s is parked and stays visible", track.id)
                     self.on_event(best, "stop", track.confidence.get(best, 0.0), track, frame)
