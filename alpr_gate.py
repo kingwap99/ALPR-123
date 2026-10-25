@@ -789,7 +789,13 @@ class Tracker:
         moved = last - first
         line = self.cfg.line_y
         margin = self.cfg.margin
-        crossed = (first - line) * (last - line) < 0 and abs(moved) >= margin * 2
+        # The crossing has to have happened near the gate: a car that is merely
+        # far up the alley must not be read as a fresh crossing on expiry.
+        crossed = (
+            (first - line) * (last - line) < 0
+            and abs(moved) >= margin * 2
+            and abs(last - line) <= margin * 6
+        )
         # A car that reverses out often disappears while its rear is still a
         # hair short of the line; treat that as leaving once it has travelled
         # at least one margin towards the line.
@@ -865,15 +871,23 @@ class Tracker:
         if now - track.first_seen >= self.cfg.min_track_seconds:
             high = self.cfg.line_y + self.cfg.margin
             low = self.cfg.line_y - self.cfg.margin
+            # A car sampled at 2 fps can slide through the margin band in two
+            # steps (580 -> 558 -> 505), so look back a few seconds instead of
+            # requiring both thresholds inside one frame.
+            recent = [ground for (ts, ground) in track.history if ts >= now - 10.0]
+            was_high = any(ground >= high for ground in recent)
+            was_low = any(ground <= low for ground in recent)
             direction = None
-            if prev_ground >= high and track.ground <= low:
+            if was_high and track.ground <= low:
                 direction = "enter" if self.cfg.enter_direction == "up" else "exit"
-            elif prev_ground <= low and track.ground >= high:
+            elif was_low and track.ground >= high:
                 direction = "enter" if self.cfg.enter_direction == "down" else "exit"
             if direction and track.pending is None:
-                track.pending = direction
-                track.pending_at = now
-                LOG.info("track %s crossing %s at y=%s (prev=%s)", track.id, direction, track.ground, prev_ground)
+                already = direction in track.gate_sent and now - track.pending_at <= self.cfg.dedupe_seconds
+                if not already:
+                    track.pending = direction
+                    track.pending_at = now
+                    LOG.info("track %s crossing %s at y=%s (prev=%s)", track.id, direction, track.ground, prev_ground)
 
         if track.pending:
             best, count = track.votes.most_common(1)[0] if track.votes else ("", 0)
