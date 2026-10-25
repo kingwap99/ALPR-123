@@ -44,6 +44,9 @@ models:
   min_ocr: 0.90
   max_vehicles: 3
   threads: 2
+  # Reject plate detections smaller than this (pixels) or with an aspect ratio
+  # outside 1.4-4.5; distant background patches otherwise read as plates.
+  min_plate_px: 60
 
 gate:
   line_y: 760

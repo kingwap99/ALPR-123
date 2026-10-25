@@ -191,6 +191,9 @@ class ModelCfg:
     min_ocr: float
     max_vehicles: int
     threads: int
+    # Small, distant "plates" are unreliable: a 39x32 px patch of a parked
+    # scooter read as a plate at 0.99 confidence. Real plates here are ~200x90.
+    min_plate_px: int = 60
 
 
 @dataclass
@@ -355,6 +358,7 @@ def load_config(path: Path) -> Config:
             min_ocr=safe_float(models.get("min_ocr"), 0.90),
             max_vehicles=max(1, min(5, safe_int(models.get("max_vehicles"), 3))),
             threads=max(1, min(4, safe_int(models.get("threads"), 2))),
+            min_plate_px=max(24, safe_int(models.get("min_plate_px"), 60)),
         ),
         gate=GateCfg(
             line_y=active_profile.line_y,
@@ -1186,6 +1190,15 @@ class Service:
             ocr = result.ocr
             if not ocr or not ocr.text:
                 continue
+            det = getattr(result, "detection", None)
+            if det is not None:
+                box = det.bounding_box
+                plate_w = float(box.x2 - box.x1)
+                plate_h = float(box.y2 - box.y1)
+                if plate_h <= 0 or plate_w < self.cfg.models.min_plate_px:
+                    continue
+                if not (1.4 <= plate_w / plate_h <= 4.5):
+                    continue
             plate = normalize_plate(ocr.text)
             confidences = ocr.confidence or []
             conf = float(min(confidences)) if confidences else 0.0
