@@ -175,7 +175,9 @@ In **全部經過** mode a car that stays parked in view is recorded once as `st
 
 Plate detections that are too small are discarded: `models.min_plate_px` (default 60 pixels) plus a 1.4-4.5 aspect-ratio check drops background patches and far-away plates that OCR happily turns into confident nonsense. Lower the value if plates in your scene are genuinely small; raise it if false reads persist.
 
-When a car leaves between two frames it may never produce the single-step crossing the gate logic needs. On track expiry the tracker compares the first and last position: a clear move from one side of the line to the other (more than twice `margin`) records the crossing, and so does vanishing within one and a half `margin` of the line after moving at least one `margin` towards it. That second case covers a car reversing out, which otherwise left only a `stop`.
+When a car leaves between two frames it may never produce the single-step crossing the gate logic needs. On track expiry the tracker looks at the last 10 seconds: a clear move from one side of the line to the other (more than twice `margin`) records the crossing, and so does vanishing within one and a half `margin` of the line after moving at least one `margin` towards it. The direction comes from the final movement, which is what a dead-end alley needs when a car drives in and then reverses straight out.
+
+A car that enters and reverses out inside a minute gets both `enter` and `exit`: gate dedupe is per direction, and a confirmed plate is kept after a crossing, so the way out does not depend on reading the plate again while reversing. Once both directions are recorded the car no longer adds a redundant 經過 (pass) row.
 
 Cats are recorded as video. With `animals.cat` enabled, seeing a cat starts a recording from `cameras.*.clip_url` (point it at the go2rtc 15 fps stream); the H.264 stream is copied without re-encoding. Recording stops after `cat_leave_seconds` without a cat, capped by `cat_clip_max_seconds`. Each visit stores one `cat` event, an annotated still, and an MP4; the history can filter by 貓咪 and the modal plays the clip. Clips follow the same retention as snapshots.
 

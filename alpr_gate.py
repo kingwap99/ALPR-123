@@ -636,7 +636,7 @@ class Track:
     pending_at: float = 0.0
     last_event: dict[str, float] = field(default_factory=dict)
     unknown_logged: bool = False
-    gate_sent: bool = False
+    gate_sent: set[str] = field(default_factory=set)
     activity_sent: bool = False
 
     @property
@@ -738,15 +738,15 @@ class Tracker:
             # other side of the line from where it started, log that crossing.
             if (
                 track.pending is None
-                and not track.gate_sent
+                and len(track.gate_sent) < 2
                 and idle >= 2.5
                 and track.votes
             ):
                 best, count = track.votes.most_common(1)[0]
                 if count >= self.cfg.votes and best and self._allowed(best):
                     crossed = self._slow_crossing(track)
-                    if crossed and self._claim_gate(best, now):
-                        track.gate_sent = True
+                    if crossed and crossed not in track.gate_sent and self._claim_gate(best, crossed, now):
+                        track.gate_sent.add(crossed)
                         LOG.info("track %s logged as %s after leaving the view", track.id, crossed)
                         self.on_event(best, crossed, track.confidence.get(best, 0.0), track, frame)
             # A confirmed plate that never crossed the gate line is still worth
@@ -755,6 +755,7 @@ class Tracker:
             if (
                 track.pending is None
                 and not track.activity_sent
+                and len(track.gate_sent) < 2
                 and idle >= 2.5
                 and track.votes
                 and self._records_activity()
@@ -779,8 +780,12 @@ class Tracker:
         """Return a direction when the track left at or past the gate line."""
         if not track.history:
             return None
-        first = track.history[0][1]
-        last = track.ground
+        # Only the last few seconds matter: a car that drove in and reversed
+        # out within one track must be judged by its final movement.
+        recent = [ground for (ts, ground) in track.history if ts >= track.last_seen - 10.0]
+        if not recent:
+            recent = [track.history[0][1], track.ground]
+        first, last = recent[0], recent[-1]
         moved = last - first
         line = self.cfg.line_y
         margin = self.cfg.margin
@@ -791,7 +796,11 @@ class Tracker:
         left_at_line = abs(last - line) <= margin * 1.5 and abs(moved) >= margin
         if not (crossed or left_at_line):
             return None
-        if moved > 0:
+        # Judge the direction by the final movement: in a dead-end alley a car
+        # often drives in and then reverses straight back out.
+        delta = recent[-1] - recent[-2] if len(recent) >= 2 else moved
+        heading_down = delta > 0 if delta != 0 else moved > 0
+        if heading_down:
             return "enter" if self.cfg.enter_direction == "down" else "exit"
         return "enter" if self.cfg.enter_direction == "up" else "exit"
 
@@ -803,11 +812,12 @@ class Tracker:
             mode = "all"
         return mode != "crossing"
 
-    def _claim_gate(self, plate: str, now: float) -> bool:
-        last = self.last_gate_event.get(plate)
+    def _claim_gate(self, plate: str, direction: str, now: float) -> bool:
+        key = f"{plate}:{direction}"
+        last = self.last_gate_event.get(key)
         if last is not None and now - last < self.cfg.dedupe_seconds:
             return False
-        self.last_gate_event[plate] = now
+        self.last_gate_event[key] = now
         return True
 
     def _touch_visit(self, plate: str, now: float) -> None:
@@ -868,11 +878,10 @@ class Tracker:
         if track.pending:
             best, count = track.votes.most_common(1)[0] if track.votes else ("", 0)
             if count >= self.cfg.votes and best:
-                if self._allowed(best) and self._claim_gate(best, now):
-                    track.gate_sent = True
+                if self._allowed(best) and track.pending not in track.gate_sent and self._claim_gate(best, track.pending, now):
+                    track.gate_sent.add(track.pending)
                     self.on_event(best, track.pending, track.confidence.get(best, 0.0), track, frame)
                 track.pending = None
-                track.votes.clear()
             elif now - track.pending_at >= self.cfg.pending_timeout:
                 if not track.unknown_logged:
                     LOG.info("track %s crossed %s without a confirmed plate", track.id, track.pending)
