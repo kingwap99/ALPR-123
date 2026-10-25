@@ -776,16 +776,20 @@ class Tracker:
         return "pass"
 
     def _slow_crossing(self, track: Track) -> Optional[str]:
-        """Return a direction when the track clearly ended past the gate line."""
+        """Return a direction when the track left at or past the gate line."""
         if not track.history:
             return None
         first = track.history[0][1]
         last = track.ground
         moved = last - first
         line = self.cfg.line_y
-        if abs(moved) < self.cfg.margin * 2:
-            return None
-        if (first - line) * (last - line) >= 0:
+        margin = self.cfg.margin
+        crossed = (first - line) * (last - line) < 0 and abs(moved) >= margin * 2
+        # A car that reverses out often disappears while its rear is still a
+        # hair short of the line; treat that as leaving once it has travelled
+        # at least one margin towards the line.
+        left_at_line = abs(last - line) <= margin * 1.5 and abs(moved) >= margin
+        if not (crossed or left_at_line):
             return None
         if moved > 0:
             return "enter" if self.cfg.enter_direction == "down" else "exit"
