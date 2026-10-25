@@ -654,6 +654,22 @@ class Tracker:
 
         for tid, track in list(self.tracks.items()):
             idle = now - track.last_seen
+            # A car can drive off between two frames and never produce the
+            # one-step crossing the gate logic needs. If it was clearly on the
+            # other side of the line from where it started, log that crossing.
+            if (
+                track.pending is None
+                and not track.gate_sent
+                and idle >= 2.5
+                and track.votes
+            ):
+                best, count = track.votes.most_common(1)[0]
+                if count >= self.cfg.votes and best and self._allowed(best):
+                    crossed = self._slow_crossing(track)
+                    if crossed and self._claim_gate(best, now):
+                        track.gate_sent = True
+                        LOG.info("track %s logged as %s after leaving the view", track.id, crossed)
+                        self.on_event(best, crossed, track.confidence.get(best, 0.0), track, frame)
             # A confirmed plate that never crossed the gate line is still worth
             # recording: cars that pass by or stop short of the line would
             # otherwise never appear in the history.
@@ -679,6 +695,22 @@ class Tracker:
         if len(recent) >= 2 and (max(recent) - min(recent)) <= 25:
             return "stop"
         return "pass"
+
+    def _slow_crossing(self, track: Track) -> Optional[str]:
+        """Return a direction when the track clearly ended past the gate line."""
+        if not track.history:
+            return None
+        first = track.history[0][1]
+        last = track.ground
+        moved = last - first
+        line = self.cfg.line_y
+        if abs(moved) < self.cfg.margin * 2:
+            return None
+        if (first - line) * (last - line) >= 0:
+            return None
+        if moved > 0:
+            return "enter" if self.cfg.enter_direction == "down" else "exit"
+        return "enter" if self.cfg.enter_direction == "up" else "exit"
 
     def _records_activity(self) -> bool:
         """Only log pass/stop records in the "all" mode."""

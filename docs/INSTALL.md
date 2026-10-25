@@ -175,6 +175,8 @@ In **全部經過** mode a car that stays parked in view is recorded once as `st
 
 Plate detections that are too small are discarded: `models.min_plate_px` (default 60 pixels) plus a 1.4-4.5 aspect-ratio check drops background patches and far-away plates that OCR happily turns into confident nonsense. Lower the value if plates in your scene are genuinely small; raise it if false reads persist.
 
+When a car leaves between two frames it may never produce the single-step crossing the gate logic needs. On track expiry the tracker compares the first and last position; if the vehicle clearly moved from one side of the line to the other (more than twice `margin`), the `enter`/`exit` crossing is still recorded instead of leaving only a `stop`.
+
 Click **歷史截圖保留 … 天** under the page title to change how long snapshots and history rows are kept (1–365 days). Applying a value prunes older entries immediately, and the hourly cleanup keeps using it. The value is stored in `retention.json` next to the database, so it survives restarts; `retain_days` in `config.yaml` is only the default for a fresh install.
 
 ## 8. Service management
