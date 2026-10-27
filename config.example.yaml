@@ -49,6 +49,9 @@ models:
   # Reject plate detections smaller than this (pixels) or with an aspect ratio
   # outside 1.4-4.5; distant background patches otherwise read as plates.
   min_plate_px: 60
+  # Set true if CoreML hangs while compiling the plate model; CPU is slower
+  # but always starts.
+  disable_coreml: false
 
 gate:
   line_y: 760

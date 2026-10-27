@@ -196,6 +196,9 @@ class ModelCfg:
     # Small, distant "plates" are unreliable: a 39x32 px patch of a parked
     # scooter read as a plate at 0.99 confidence. Real plates here are ~200x90.
     min_plate_px: int = 60
+    # CoreML can deadlock while compiling the plate model on some boots; the
+    # CPU provider is slower but always starts.
+    disable_coreml: bool = False
 
 
 @dataclass
@@ -375,6 +378,7 @@ def load_config(path: Path) -> Config:
             max_vehicles=max(1, min(5, safe_int(models.get("max_vehicles"), 3))),
             threads=max(1, min(4, safe_int(models.get("threads"), 2))),
             min_plate_px=max(24, safe_int(models.get("min_plate_px"), 60)),
+            disable_coreml=bool(models.get("disable_coreml", False)),
         ),
         gate=GateCfg(
             line_y=active_profile.line_y,
@@ -1254,11 +1258,14 @@ class Service:
             sess_options=vehicle_opts,
         )
         LOG.info("loading plate detector/OCR")
+        plate_providers = ["CPUExecutionProvider"] if self.cfg.models.disable_coreml else None
         self.alpr = ALPR(
             detector_model=self.cfg.models.plate_detector,
             ocr_model=self.cfg.models.plate_ocr,
             detector_sess_options=plate_opts,
             ocr_sess_options=plate_opts,
+            detector_providers=plate_providers,
+            ocr_providers=plate_providers,
         )
         # Warm-up catches model/provider failures before the first real frame.
         blank = np.zeros((384, 384, 3), dtype=np.uint8)

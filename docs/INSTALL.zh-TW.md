@@ -178,6 +178,8 @@ UI 的「監測鏡頭」選好就直接切換。頁面載入時程式更新選�
 
 如果跨越判斷線時車牌一直讀不出來（例如轉進車位、背光或角度太斜），會在等待 `pending_timeout` 後記一筆 `unknown`：保留當下截圖、方向記在 payload 的 `crossing`，歷史清單顯示「未辨識」，HA 也會收到 `event: unknown` 的 webhook。這樣即使 OCR 失敗，也知道有車進出。
 
+若服務重啟時卡在載入車牌模型（日誌停在 `loading plate detector/OCR`、CPU 0%），那是 CoreML 編譯卡住；把 `models.disable_coreml` 設為 `true` 改用 CPU 就能正常啟動（較慢但穩定）。
+
 貓咪會另外以影片記錄。`animals.cat` 開啟後，偵測到貓就從 `cameras.*.clip_url`（建議指向 go2rtc 的 15fps 串流）開始錄影，直接複製 H.264 不重編碼；連續 `cat_leave_seconds` 秒沒再看到貓就停止，最長 `cat_clip_max_seconds`。每一次出現會產生一筆 `cat` 事件、一張標註截圖與一段 MP4，歷史清單可用「貓咪」篩選，點開會直接播放影片。影片與截圖都套用截圖保留天數。
 
 頁面標題下的「歷史截圖保留 N 天」可以直接點開修改（1–365 天）。套用後會立刻清掉超過天數的紀錄與截圖，之後每小時的清理也沿用這個值。設定存在資料夾內的 `retention.json`，重啟後仍然有效；`config.yaml` 的 `retain_days` 只是新安裝時的預設值。
