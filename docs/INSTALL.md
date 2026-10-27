@@ -179,6 +179,8 @@ When a car leaves between two frames it may never produce the single-step crossi
 
 A car that enters and reverses out inside a minute gets both `enter` and `exit`: gate dedupe is per direction, and a confirmed plate is kept after a crossing, so the way out does not depend on reading the plate again while reversing. Once both directions are recorded the car no longer adds a redundant 經過 (pass) row.
 
+When a crossing happens but the plate never resolves (turning into a driveway, backlight, steep angle), an `unknown` event is written after `pending_timeout`: the frame is saved, the crossing direction goes into the payload as `crossing`, the history shows 未辨識, and Home Assistant receives an `event: unknown` webhook. OCR failures no longer hide the fact that a car went through.
+
 Cats are recorded as video. With `animals.cat` enabled, seeing a cat starts a recording from `cameras.*.clip_url` (point it at the go2rtc 15 fps stream); the H.264 stream is copied without re-encoding. Recording stops after `cat_leave_seconds` without a cat, capped by `cat_clip_max_seconds`. Each visit stores one `cat` event, an annotated still, and an MP4; the history can filter by 貓咪 and the modal plays the clip. Clips follow the same retention as snapshots.
 
 Click **歷史截圖保留 … 天** under the page title to change how long snapshots and history rows are kept (1–365 days). Applying a value prunes older entries immediately, and the hourly cleanup keeps using it. The value is stored in `retention.json` next to the database, so it survives restarts; `retain_days` in `config.yaml` is only the default for a fresh install.

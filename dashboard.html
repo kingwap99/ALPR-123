@@ -71,6 +71,7 @@
     .badge.pass { background: rgba(106,169,255,.13); color: var(--accent); border: 1px solid rgba(106,169,255,.3); }
     .badge.stop { background: rgba(176,140,255,.13); color: var(--test); border: 1px solid rgba(176,140,255,.3); }
     .badge.cat { background: rgba(255,165,0,.14); color: #ffb45e; border: 1px solid rgba(255,180,94,.32); }
+    .badge.unknown { background: rgba(145,161,191,.14); color: #b9c6dd; border: 1px solid rgba(145,161,191,.32); }
     .badge.test { background: rgba(176,140,255,.13); color: var(--test); border: 1px solid rgba(176,140,255,.3); }
     .last-img { border-radius: 12px; overflow: hidden; background: #05080f; border: 1px solid var(--line); }
     .last-img img { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; }
@@ -158,7 +159,7 @@
         <h2>歷史進出 <span class="muted" id="eventCount" style="font-weight:400;font-size:12px"></span></h2>
         <div class="filters">
           <input id="q" type="search" placeholder="搜尋車牌" autocomplete="off">
-          <select id="direction"><option value="">全部</option><option value="enter">進入</option><option value="exit">離開</option><option value="pass">經過</option><option value="stop">暫停</option><option value="cat">貓咪</option></select>
+          <select id="direction"><option value="">全部</option><option value="enter">進入</option><option value="exit">離開</option><option value="pass">經過</option><option value="stop">暫停</option><option value="cat">貓咪</option><option value="unknown">未辨識</option></select>
           <input id="day" type="date">
           <button class="btn" id="refresh">重新整理</button>
         </div>
@@ -297,6 +298,7 @@
     }
 
     function fmtPlate(value) {
+      if (String(value ?? '').toUpperCase() === 'UNKNOWN') return '未辨識';
       const plate = String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
       const match = plate.match(/^([A-Z]{2,3})([0-9]{4})$/);
       return match ? `${match[1]}-${match[2]}` : plate;
@@ -307,7 +309,7 @@
     }
 
     function badge(direction, test) {
-      const labels = { enter: ['enter', '進入'], exit: ['exit', '離開'], pass: ['pass', '經過'], stop: ['stop', '暫停'], cat: ['cat', '貓咪'] };
+      const labels = { enter: ['enter', '進入'], exit: ['exit', '離開'], pass: ['pass', '經過'], stop: ['stop', '暫停'], cat: ['cat', '貓咪'], unknown: ['unknown', '未辨識'] };
       const [cls, text] = labels[direction] || ['exit', esc(direction || '—')];
       const d = `<span class="badge ${cls}">${text}</span>`;
       return d + (test ? ' <span class="badge test">TEST</span>' : '');

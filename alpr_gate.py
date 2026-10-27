@@ -41,7 +41,7 @@ NON_ALNUM = re.compile(r"[^A-Z0-9]")
 SNAPSHOT_RE = re.compile(r"^[A-Za-z0-9._-]+\.jpg$")
 CLIP_RE = re.compile(r"^[A-Za-z0-9._-]+\.mp4$")
 VEHICLE_LABELS = {"car", "truck", "bus"}
-EVENT_DIRECTIONS = ("enter", "exit", "pass", "stop", "cat")
+EVENT_DIRECTIONS = ("enter", "exit", "pass", "stop", "cat", "unknown")
 ASSET_DIR = Path(__file__).with_name("assets")
 PLATE_FONT_PATH = ASSET_DIR / "fonts" / "TWPlateSans-Bold.ttf"
 # Measured on real plates: character pitch is about 0.53 x cap height, which is
@@ -660,11 +660,13 @@ class Tracker:
         plate_cfg: PlateCfg,
         on_event,
         record_mode: Optional[Callable[[], str]] = None,
+        on_unknown: Optional[Callable[[str, "Track", np.ndarray], None]] = None,
     ) -> None:
         self.cfg = cfg
         self.plate_cfg = plate_cfg
         self.on_event = on_event
         self.record_mode = record_mode
+        self.on_unknown = on_unknown
         self.tracks: dict[int, Track] = {}
         self.next_id = 1
         self.last_gate_event: dict[str, float] = {}
@@ -900,6 +902,8 @@ class Tracker:
                 if not track.unknown_logged:
                     LOG.info("track %s crossed %s without a confirmed plate", track.id, track.pending)
                     track.unknown_logged = True
+                    if self.on_unknown is not None:
+                        self.on_unknown(track.pending, track, frame)
                 track.pending = None
                 track.votes.clear()
 
@@ -1106,7 +1110,7 @@ class Service:
 
     def start(self) -> None:
         self._load_models()
-        self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode)
+        self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
         self.capture.start()
         self.thread = threading.Thread(target=self._run, name="alpr-worker", daemon=True)
         self.thread.start()
@@ -1177,7 +1181,7 @@ class Service:
             self.gate_cfg = self._gate_for(self.profile)
             self.capture = Capture(self.camera_cfg)
             self.motion = MotionGate(self.cfg.motion)
-            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode)
+            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
             with self.lock:
                 self.status.update(
                     {
@@ -1218,7 +1222,7 @@ class Service:
                 self.profile = profile
                 self.gate_cfg = self._gate_for(profile)
                 self.motion = MotionGate(self.cfg.motion)
-                self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode)
+                self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
         LOG.info("roi for %s set to %s", camera_id, parsed)
         return True
 
@@ -1298,7 +1302,7 @@ class Service:
 
     def _process(self, frame: np.ndarray, now: float) -> None:
         if self.tracker is None:
-            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode)
+            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
         detections = self.vehicle_detector.predict(frame)
         vehicles: list[tuple[float, tuple[int, int, int, int], Any]] = []
         height, width = frame.shape[:2]
@@ -1411,6 +1415,31 @@ class Service:
             self.status["events_today"] = self.store.count_today() + 1
         self.store.add(seen_at, plate, direction, confidence, snapshot.name if snapshot else "", payload)
         LOG.info("event %s %s conf=%.3f track=%s", direction, plate, confidence, track.id)
+        self._post_webhook(payload)
+
+    def _on_unknown(self, direction: str, track: Track, frame: np.ndarray) -> None:
+        """Record a gate crossing whose plate was never confirmed."""
+        seen_at = iso_now()
+        snapshot = self._save_snapshot(frame, track, "UNKNOWN", direction, 0.0, card=False)
+        snapshot_url = ""
+        if snapshot and self.cfg.ha.public_base_url:
+            snapshot_url = f"{self.cfg.ha.public_base_url}/snapshots/{snapshot.name}"
+        payload = {
+            "event": "unknown",
+            "plate": "UNKNOWN",
+            "crossing": direction,
+            "confidence": 0.0,
+            "camera": self.camera_cfg.name,
+            "snapshot": snapshot_url,
+            "seen_at": seen_at,
+            "track_id": track.id,
+        }
+        with self.lock:
+            self.status["last_event"] = "unknown"
+            self.status["last_seen"] = seen_at
+            self.status["last_snapshot"] = snapshot_url or None
+        self.store.add(seen_at, "UNKNOWN", "unknown", 0.0, snapshot.name if snapshot else "", payload)
+        LOG.info("event unknown %s track=%s", direction, track.id)
         self._post_webhook(payload)
 
     def _annotate_cat(self, frame: np.ndarray, box: tuple[int, int, int, int], confidence: float) -> np.ndarray:
@@ -1529,7 +1558,13 @@ class Service:
         self._post_webhook(payload)
 
     def _save_snapshot(
-        self, frame: np.ndarray, track: Track, plate: str, direction: str, confidence: float
+        self,
+        frame: np.ndarray,
+        track: Track,
+        plate: str,
+        direction: str,
+        confidence: float,
+        card: bool = True,
     ) -> Optional[Path]:
         try:
             ts = now_local().strftime("%Y%m%d-%H%M%S")
@@ -1547,7 +1582,8 @@ class Service:
             label = f"{format_plate_display(plate)} {direction} {confidence:.2f}"
             cv2.putText(image, label, (max(8, x1), max(28, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
             cv2.line(image, (0, self.gate_cfg.line_y), (image.shape[1], self.gate_cfg.line_y), (80, 80, 255), 2)
-            image = draw_plate_card(image, format_plate_display(plate))
+            if card:
+                image = draw_plate_card(image, format_plate_display(plate))
             cv2.imwrite(str(path), image, [cv2.IMWRITE_JPEG_QUALITY, 86])
             self.last_snapshot_path = path
             return path
