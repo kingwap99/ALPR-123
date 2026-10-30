@@ -317,6 +317,9 @@ class CameraProfile:
     live_url: str
     roi: Optional[tuple[float, float, float, float]] = None
     clip_url: Optional[str] = None
+    # Cat sentry flag: watched cameras run a low-rate cat-only pipeline.
+    # The active camera checks cats inside the main 2 fps pipeline instead.
+    cat_watch: bool = False
 
 
 @dataclass
@@ -713,6 +716,189 @@ class ClipRecorder:
                 proc.kill()
             except Exception:
                 pass
+
+
+class CatSentinel:
+    """Low-rate cat watcher for one non-active camera.
+
+    Cats linger for tens of seconds, so 1 fps at 640x360 is plenty. Motion is
+    gated first and the shared detector runs behind a lock, so idle sentinels
+    cost only ffmpeg decoding and never compete with the main ALPR pipeline.
+    """
+
+    FPS = 1.0
+    WIDTH = 640
+    HEIGHT = 360
+
+    def __init__(self, service: "Service", profile: CameraProfile) -> None:
+        self.service = service
+        self.profile = profile
+        self.camera_cfg = CameraCfg(
+            name=profile.camera.name,
+            rtsp_url=profile.camera.rtsp_url,
+            width=self.WIDTH,
+            height=self.HEIGHT,
+            fps=self.FPS,
+            ffmpeg=profile.camera.ffmpeg,
+            startup_timeout=profile.camera.startup_timeout,
+            read_timeout=max(4.0, profile.camera.read_timeout),
+        )
+        self.capture = Capture(self.camera_cfg)
+        self.motion = MotionGate(service.cfg.motion)
+        self.stop_event = threading.Event()
+        self.thread: Optional[threading.Thread] = None
+        self.last_cat_seen = 0.0
+        self.last_cat_at = 0.0
+        self.clip: Optional[ClipRecorder] = None
+        self.clip_started = 0.0
+        self.clip_name = ""
+        self.clip_poster = ""
+        self.clip_conf = 0.0
+        self.clip_ts = ""
+
+    def start(self) -> None:
+        if self.thread and self.thread.is_alive():
+            return
+        self.capture.start()
+        self.thread = threading.Thread(target=self._run, name=f"cat-{self.profile.id}", daemon=True)
+        self.thread.start()
+        LOG.info("cat sentinel started: %s", self.profile.id)
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.clip is not None:
+            try:
+                self._finish_clip(time.monotonic())
+            except Exception as exc:
+                LOG.warning("sentinel %s clip finish failed: %s", self.profile.id, exc)
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5)
+        # Stop capture after the worker exits; its restart path would
+        # otherwise respawn ffmpeg right after we killed it.
+        self.capture.stop()
+        LOG.info("cat sentinel stopped: %s", self.profile.id)
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                frame = self.capture.read(self.camera_cfg.read_timeout)
+                if frame is None:
+                    raise RuntimeError("no frame from ffmpeg")
+                now = time.monotonic()
+                should, _diff = self.motion.should_process(frame, now)
+                if should:
+                    self._check(frame, now)
+                self._maybe_finish_clip(now)
+            except Exception as exc:
+                LOG.warning("cat sentinel %s: %s", self.profile.id, str(exc)[:200])
+                self.capture.stop()
+                self.stop_event.wait(5.0)
+                if not self.stop_event.is_set():
+                    try:
+                        self.capture.start()
+                    except Exception as start_exc:
+                        LOG.warning("cat sentinel %s restart failed: %s", self.profile.id, start_exc)
+                        self.stop_event.wait(5.0)
+
+    def _check(self, frame: np.ndarray, now: float) -> None:
+        if not self.service.cfg.animals.cat:
+            return
+        detector = self.service.vehicle_detector
+        if detector is None:
+            return
+        with self.service.infer_lock:
+            detections = detector.predict(frame)
+        best: Optional[tuple[float, tuple[int, int, int, int]]] = None
+        height, width = frame.shape[:2]
+        for det in detections:
+            if str(det.label).lower() != "cat":
+                continue
+            conf = float(det.confidence)
+            if conf < self.service.cat_conf:
+                continue
+            box = det.bounding_box
+            x1 = max(0, int(box.x1))
+            y1 = max(0, int(box.y1))
+            x2 = min(width, int(box.x2))
+            y2 = min(height, int(box.y2))
+            if x2 - x1 < 20 or y2 - y1 < 20:
+                continue
+            if best is None or conf > best[0]:
+                best = (conf, (x1, y1, x2, y2))
+        if best is None:
+            return
+        conf, box = best
+        self.last_cat_seen = now
+        if self.clip is None and now - self.last_cat_at >= self.service.cfg.animals.cat_dedupe_seconds:
+            self._start_clip(frame, box, conf, now)
+
+    def _poster_name(self, ts: str, confidence: float) -> str:
+        return f"{ts}-{self.profile.id}-cat-{int(round(confidence * 100)):03d}.jpg"
+
+    def _start_clip(self, frame: np.ndarray, box: tuple[int, int, int, int], confidence: float, now: float) -> None:
+        ts = now_local().strftime("%Y%m%d-%H%M%S")
+        poster = self._poster_name(ts, confidence)
+        try:
+            image = frame.copy()
+            x1, y1, x2, y2 = box
+            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 165, 255), 2)
+            cv2.putText(image, f"CAT {confidence:.2f}", (max(6, x1), max(22, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+            path = self.service.snapshot_dir / poster
+            cv2.imwrite(str(path), image, [cv2.IMWRITE_JPEG_QUALITY, 86])
+        except Exception as exc:
+            LOG.warning("sentinel %s poster failed: %s", self.profile.id, exc)
+            poster = ""
+        clip_url = (self.profile.clip_url or self.profile.camera.rtsp_url or "").strip()
+        if not clip_url:
+            self.last_cat_at = now
+            self.service._store_cat_event(iso_now(), confidence, poster, "", camera=self.profile.id)
+            return
+        name = f"{ts}-{self.profile.id}-cat.mp4"
+        recorder = ClipRecorder(
+            self.camera_cfg.ffmpeg,
+            clip_url,
+            self.service.clip_dir / name,
+            self.service.cfg.animals.cat_clip_max_seconds,
+        )
+        if not recorder.start():
+            self.last_cat_at = now
+            self.service._store_cat_event(iso_now(), confidence, poster, "", camera=self.profile.id)
+            return
+        self.clip = recorder
+        self.clip_started = now
+        self.clip_name = name
+        self.clip_poster = poster
+        self.clip_conf = confidence
+        self.clip_ts = iso_now()
+        LOG.info("sentinel %s cat clip started: %s", self.profile.id, name)
+
+    def _maybe_finish_clip(self, now: float) -> None:
+        if self.clip is None:
+            return
+        if now - self.last_cat_seen > self.service.cfg.animals.cat_leave_seconds:
+            self._finish_clip(now)
+        elif now - self.clip_started > self.service.cfg.animals.cat_clip_max_seconds:
+            self._finish_clip(now)
+
+    def _finish_clip(self, now: float) -> None:
+        recorder, self.clip = self.clip, None
+        if recorder is not None:
+            recorder.stop()
+        name = self.clip_name
+        path = self.service.clip_dir / name if name else None
+        duration = now - self.clip_started
+        if path is not None and path.exists() and path.stat().st_size > 4096:
+            LOG.info("sentinel %s cat clip saved: %s (%.1f s)", self.profile.id, name, duration)
+            self.service._store_cat_event(self.clip_ts or iso_now(), self.clip_conf, self.clip_poster, name, camera=self.profile.id)
+        else:
+            if path is not None:
+                path.unlink(missing_ok=True)
+            self.service._store_cat_event(self.clip_ts or iso_now(), self.clip_conf, self.clip_poster, "", camera=self.profile.id)
+        self.last_cat_at = now
+        self.clip_name = ""
+        self.clip_poster = ""
+        self.clip_conf = 0.0
+        self.clip_ts = ""
 
 
 class MotionGate:
@@ -1226,6 +1412,12 @@ class Service:
         self.stop_event = threading.Event()
         self.lock = threading.Lock()
         self.switch_lock = threading.Lock()
+        # Serialises ONNX inference between the main worker and cat sentinels
+        # so they never oversubscribe the CPU cores.
+        self.infer_lock = threading.Lock()
+        self.sentinel_lock = threading.Lock()
+        self.sentinel_stop = threading.Event()
+        self.cat_sentinels: dict[str, CatSentinel] = {}
         self.status: dict[str, Any] = {
             "state": "starting",
             "camera_ok": False,
@@ -1263,6 +1455,7 @@ class Service:
         self.capture.start()
         self.thread = threading.Thread(target=self._run, name="alpr-worker", daemon=True)
         self.thread.start()
+        self.sync_sentinels()
         with self.lock:
             self.status["state"] = "running"
         LOG.info(
@@ -1296,6 +1489,8 @@ class Service:
 
     def cameras_info(self) -> dict[str, Any]:
         overlay_ids = self.overlay_ids
+        with self.sentinel_lock:
+            sentinel_ids = set(self.cat_sentinels)
         return {
             "active": self.profile_id,
             "cameras": [
@@ -1309,10 +1504,34 @@ class Service:
                     "width": profile.camera.width,
                     "height": profile.camera.height,
                     "managed": profile.id in overlay_ids,
+                    "cat_watch": bool(profile.cat_watch),
+                    "cat_active": profile.id in sentinel_ids or profile.id == self.profile_id,
                 }
                 for profile in self.cfg.cameras.values()
             ],
         }
+
+    def sync_sentinels(self) -> None:
+        """Start/stop cat sentinels to match per-camera cat_watch flags."""
+        if self.sentinel_stop.is_set():
+            return
+        wanted: list[CameraProfile] = []
+        for profile in self.cfg.cameras.values():
+            if profile.cat_watch and profile.id != self.profile_id:
+                wanted.append(profile)
+        with self.sentinel_lock:
+            current = set(self.cat_sentinels)
+            target = {profile.id for profile in wanted}
+            for cid in current - target:
+                sentinel = self.cat_sentinels.pop(cid)
+                threading.Thread(target=sentinel.stop, name=f"cat-stop-{cid}", daemon=True).start()
+            for profile in wanted:
+                if profile.id in current:
+                    continue
+                sentinel = CatSentinel(self, profile)
+                self.cat_sentinels[profile.id] = sentinel
+                threading.Thread(target=sentinel.start, name=f"cat-start-{profile.id}", daemon=True).start()
+        LOG.info("cat sentinels: %s", sorted(target) or "none")
 
     def profile_from_payload(self, entry: dict[str, Any]) -> Optional[CameraProfile]:
         """Build a CameraProfile from a UI payload; returns None when invalid."""
@@ -1356,6 +1575,7 @@ class Service:
             live_url=f"{live_base}/stream.html?src={urllib.parse.quote(live_stream)}",
             roi=parse_roi(entry.get("roi")),
             clip_url=str(entry.get("clip_url") or "").strip() or rtsp_url,
+            cat_watch=bool(entry.get("cat_watch", False)),
         )
 
     def _save_cameras_overlay(self) -> None:
@@ -1375,6 +1595,7 @@ class Service:
                     "line_y": profile.line_y,
                     "enter_direction": profile.enter_direction,
                     "roi": list(profile.roi) if profile.roi else None,
+                    "cat_watch": profile.cat_watch,
                 }
             )
         payload = {"cameras": entries, "verified": self.verified, "tweaks": self.tweaks}
@@ -1424,6 +1645,7 @@ class Service:
             return False, "config.yaml 內建的鏡頭請直接編輯設定檔"
         profile = self.cfg.cameras.pop(camera_id)
         self.verified.pop(camera_id, None)
+        self.tweaks.pop(camera_id, None)
         try:
             state = json.loads(self.roi_path.read_text()) if self.roi_path.exists() else {}
             state.pop(camera_id, None)
@@ -1431,6 +1653,7 @@ class Service:
         except Exception:
             pass
         self._save_cameras_overlay()
+        self.sync_sentinels()
         LOG.info("camera %s removed via UI", camera_id)
         return True, ""
 
@@ -1506,6 +1729,7 @@ class Service:
             self.capture.start()
             self.thread = threading.Thread(target=self._run, name="alpr-worker", daemon=True)
             self.thread.start()
+            self.sync_sentinels()
             try:
                 (self.data_dir / "active_camera.json").write_text(json.dumps({"camera": camera_id}))
             except Exception as exc:
@@ -1555,6 +1779,17 @@ class Service:
                 self.motion = MotionGate(self.cfg.motion)
                 self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
         LOG.info("gate for %s line_y=%s enter=%s", camera_id, profile.line_y, profile.enter_direction)
+        return True
+
+    def set_cat_watch(self, camera_id: str, enabled: Any) -> bool:
+        """Toggle the cat sentry flag for one camera and reconcile watchers."""
+        if camera_id not in self.cfg.cameras:
+            return False
+        profile = self.cfg.cameras[camera_id]
+        profile.cat_watch = bool(enabled)
+        self._save_cameras_overlay()
+        self.sync_sentinels()
+        LOG.info("cat watch for %s set to %s", camera_id, profile.cat_watch)
         return True
 
     def _crop_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -1805,7 +2040,7 @@ class Service:
     ) -> None:
         """Start recording when a cat enters; stop when it leaves."""
         ts = now_local().strftime("%Y%m%d-%H%M%S")
-        poster = f"{ts}-cat-{int(round(confidence * 100)):03d}.jpg"
+        poster = f"{ts}-{self.profile.id}-cat-{int(round(confidence * 100)):03d}.jpg"
         try:
             path = self.snapshot_dir / poster
             cv2.imwrite(str(path), self._annotate_cat(frame, box, confidence), [cv2.IMWRITE_JPEG_QUALITY, 86])
@@ -1869,7 +2104,7 @@ class Service:
         self.clip_conf = 0.0
         self.clip_ts = ""
 
-    def _store_cat_event(self, seen_at: str, confidence: float, poster: str, clip: str) -> None:
+    def _store_cat_event(self, seen_at: str, confidence: float, poster: str, clip: str, camera: Optional[str] = None) -> None:
         snapshot_url = ""
         if poster and self.cfg.ha.public_base_url:
             snapshot_url = f"{self.cfg.ha.public_base_url}/snapshots/{poster}"
@@ -1880,7 +2115,7 @@ class Service:
             "event": "cat",
             "plate": "CAT",
             "confidence": round(confidence, 4),
-            "camera": self.camera_cfg.name,
+            "camera": camera or self.camera_cfg.name,
             "snapshot": snapshot_url,
             "clip": clip,
             "clip_url": clip_url,
@@ -2028,6 +2263,15 @@ class Service:
 
     def stop(self) -> None:
         self.stop_event.set()
+        self.sentinel_stop.set()
+        with self.sentinel_lock:
+            sentinels = list(self.cat_sentinels.values())
+            self.cat_sentinels.clear()
+        for sentinel in sentinels:
+            try:
+                sentinel.stop()
+            except Exception as exc:
+                LOG.warning("cat sentinel stop failed: %s", exc)
         if self.clip is not None:
             try:
                 self._finish_clip(time.monotonic())
@@ -2160,6 +2404,13 @@ def create_app(service: Service) -> FastAPI:
     def set_camera_gate(camera_id: str, payload: dict[str, Any], request: Request):
         svc: Service = request.app.state.service
         if not svc.set_gate(camera_id, payload.get("line_y"), payload.get("enter_direction")):
+            raise HTTPException(status_code=404, detail="unknown camera")
+        return svc.cameras_info()
+
+    @app.post("/api/cameras/{camera_id}/cat-watch")
+    def set_camera_cat_watch(camera_id: str, payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        if not svc.set_cat_watch(camera_id, bool(payload.get("enabled"))):
             raise HTTPException(status_code=404, detail="unknown camera")
         return svc.cameras_info()
 

@@ -623,10 +623,19 @@
       const monitored = $('camMonitored');
       monitored.innerHTML = state.cameras.map((c) => {
         const active = c.id === activeCamera;
-        return `<div class="cam-row"><span class="name">${esc(c.label)}</span><span class="src">${esc(c.id)} · ${c.width}x${c.height}</span>${active ? '<span class="tag">使用中</span>' : `<button class="btn small" data-switch="${esc(c.id)}">設為使用中</button>`}${c.managed && !active ? `<button class="btn small" data-del="${esc(c.id)}">移除</button>` : ''}</div>`;
+        let cat = '';
+        if (active) {
+          cat = '<span class="tag">貓咪監控（主辨識）</span>';
+        } else if (c.cat_watch) {
+          cat = '<span class="tag">貓咪監控中</span><button class="btn small" data-cat="' + esc(c.id) + '" data-cat-on="0">關閉貓</button>';
+        } else {
+          cat = '<button class="btn small" data-cat="' + esc(c.id) + '" data-cat-on="1">貓偵測 off</button>';
+        }
+        return `<div class="cam-row"><span class="name">${esc(c.label)}</span><span class="src">${esc(c.id)} · ${c.width}x${c.height}</span>${cat}${active ? '<span class="tag">使用中</span>' : `<button class="btn small" data-switch="${esc(c.id)}">設為使用中</button>`}${c.managed && !active ? `<button class="btn small" data-del="${esc(c.id)}">移除</button>` : ''}</div>`;
       }).join('');
       monitored.querySelectorAll('[data-switch]').forEach((b) => { b.onclick = () => switchTo(b.dataset.switch); });
       monitored.querySelectorAll('[data-del]').forEach((b) => { b.onclick = () => removeCam(b.dataset.del); });
+      monitored.querySelectorAll('[data-cat]').forEach((b) => { b.onclick = () => setCatWatch(b.dataset.cat, b.dataset.catOn === '1'); });
       const avail = $('camAvailable');
       const q = camPanel.filter.toLowerCase();
       const items = camPanel.streams.filter((s) => !q || s.name.toLowerCase().includes(q));
@@ -710,6 +719,20 @@
         renderCamPanel();
         setTimeout(refreshStatus, 1200);
       } catch (e) { $('camTestResult').textContent = '切換失敗'; }
+    }
+
+    async function setCatWatch(id, enabled) {
+      try {
+        const r = await fetch('/api/cameras/' + encodeURIComponent(id) + '/cat-watch', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({enabled}),
+        });
+        const d = await r.json();
+        if (!r.ok) { $('camTestResult').textContent = '✗ ' + (d.detail || '設定失敗'); return; }
+        state.cameras = d.cameras || [];
+        renderCamPanel();
+        const current = state.cameras.find((c) => c.id === id);
+        $('camTestResult').textContent = enabled ? '✓ ' + (current ? current.label : id) + ' 貓哨兵已啟動（1fps，有動才跑模型）' : (current ? current.label : id) + ' 貓哨兵已關閉';
+      } catch (e) { $('camTestResult').textContent = '貓偵測設定失敗'; }
     }
 
     $('camBtn').onclick = () => {

@@ -24,6 +24,7 @@ The project does not require MQTT, an HA add-on, or a cloud service.
 - Built-in web UI: live camera, last event, searchable history, image modal, and ROI editor.
 - Home Assistant webhook integration with a sample automation, helpers, and webpage panel.
 - Cat sightings are recorded as a clip from the moment they enter the view until they leave.
+- Any added camera can run its own cat watch in parallel with the active plate camera; toggle it per camera with the 貓偵測 button in the camera settings panel.
 - Native Home Assistant custom integration with config flow, sensors, health entities, and an `alpr_gate_event` bus event.
 - launchd template for macOS and systemd template for Linux.
 
