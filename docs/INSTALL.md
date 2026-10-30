@@ -165,6 +165,8 @@ The iframe works on a local HTTP HA session. A remote HTTPS HA session may block
 
 Choose a camera in the UI; it switches immediately. The selection changes the ALPR source and the live view, is persisted in `active_camera.json`, and survives a restart. Programmatic selector updates during page load are ignored, so reloading the page does not send a switch request.
 
+The **Camera settings** button adds new cameras without editing YAML. The panel lists every stream on the go2rtc server (credentials stripped). **Test** probes the stream with ffprobe; only a stream that answers can be **Added**. UI-added cameras are stored in `cameras.json` next to the database, survive restarts, and can be removed from the same panel without touching their history. The **Detection area** editor also drags the pink gate line and selects the enter direction, saved per camera.
+
 Use a test camera with a known parked car to validate plate recognition and the webhook first. Switch to the production camera only when the line, direction, and ROI are correct. Opening a garage door is a physical action; test it with the door in view and a manual stop available.
 
 The saved ROI is outlined with a dashed box on the live view, fitted to the displayed video area. Use **隱藏偵測範圍 / 顯示偵測範圍** in the live card header to toggle it; the choice is remembered in the browser.

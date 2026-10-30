@@ -107,6 +107,21 @@
     .modal-body h3 { margin: 0; font-size: 17px; }
     .retention-field { display: flex; align-items: center; gap: 9px; }
     .retention-field input { width: 100px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font: inherit; font-size: 15px; outline: none; }
+    .cam-list { display: grid; gap: 8px; margin-top: 12px; }
+    .cam-row { display: flex; align-items: center; gap: 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; font-size: 13px; }
+    .cam-row .name { font-weight: 650; white-space: nowrap; }
+    .cam-row .src { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+    .cam-row .tag { font-size: 11px; border-radius: 999px; padding: 3px 8px; background: rgba(95,224,184,.14); color: #5fe0b8; white-space: nowrap; }
+    .cam-row .tag.warn { background: rgba(255,180,94,.14); color: #ffb45e; }
+    .cam-row .tag.gray { background: rgba(148,163,184,.12); color: var(--muted); }
+    .cam-row .btn { flex-shrink: 0; }
+    .cam-section-title { margin-top: 18px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+    .cam-section-title input { flex: 1; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; font: inherit; font-size: 13px; outline: none; }
+    .gate-line { position: absolute; left: 0; right: 0; height: 3px; background: #ff5470; cursor: ns-resize; touch-action: none; }
+    .gate-line::after { content: '判斷線'; position: absolute; right: 8px; top: -20px; font-size: 11px; color: #ff8ba0; background: rgba(5,8,15,.72); padding: 2px 7px; border-radius: 6px; }
+    .dir-buttons { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+    .dir-buttons button { background: var(--panel-2); color: var(--muted); border: 0; padding: 7px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+    .dir-buttons button.on { background: rgba(95,224,184,.16); color: #5fe0b8; font-weight: 650; }
     .retention-field input:focus { border-color: var(--accent); }
     .retention-presets { display: flex; gap: 7px; flex-wrap: wrap; }
     .retention-presets .btn { padding: 6px 10px; font-size: 12px; }
@@ -132,6 +147,7 @@
       </div>
       <div class="head-right">
         <button class="btn" id="roiBtn">偵測範圍</button>
+        <button class="btn" id="camBtn">鏡頭設定</button>
         <div class="cam-picker"><span>記錄</span><select id="recordMode" aria-label="記錄模式"><option value="all">全部經過</option><option value="crossing">只看跨越</option></select></div>
         <div class="cam-picker"><span>貓咪 ≥</span><select id="catConf" aria-label="貓咪信心門檻"></select></div>
         <div class="cam-picker"><span>監測鏡頭</span><select id="cameraSelect" aria-label="監測鏡頭" autocomplete="off"></select></div>
@@ -187,10 +203,15 @@
   <div class="modal" id="roiModal" role="dialog" aria-modal="true">
     <div class="modal-box">
       <button class="modal-close" id="roiClose" aria-label="關閉">×</button>
-      <div class="roi-stage" id="roiStage"><img id="roiImage" alt="偵測範圍設定畫面" draggable="false"><div class="roi-rect" id="roiRect"></div></div>
+      <div class="roi-stage" id="roiStage"><img id="roiImage" alt="偵測範圍設定畫面" draggable="false"><div class="roi-rect" id="roiRect"></div><div class="gate-line" id="gateLine"></div></div>
       <div class="roi-actions">
-        <span>在畫面上拖曳框選車牌可能出現的區域；框外不跑 motion / 車輛偵測。</span>
-        <div class="buttons"><button class="btn" id="roiClear">清除</button><button class="btn" id="roiSave">儲存</button></div>
+        <span>拖曳框選偵測範圍；拖拉粉紅色判斷線設定進出判定位置。</span>
+        <div class="buttons">
+          <span style="font-size:12px;color:var(--muted)">進入方向</span>
+          <span class="dir-buttons" id="dirButtons"><button type="button" data-dir="down">↓ 進入</button><button type="button" data-dir="up">↑ 進入</button></span>
+          <button class="btn" id="roiClear">清除框</button>
+          <button class="btn" id="roiSave">儲存</button>
+        </div>
       </div>
     </div>
   </div>
@@ -216,6 +237,21 @@
           <button class="btn" id="retentionCancel" type="button">取消</button>
           <button class="btn" id="retentionSave" type="button">套用</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="camModal" role="dialog" aria-modal="true" aria-labelledby="camTitle">
+    <div class="modal-box">
+      <button class="modal-close" id="camClose" aria-label="關閉">×</button>
+      <div class="modal-body">
+        <h3 id="camTitle">鏡頭設定</h3>
+        <div class="muted" style="font-size:13px;line-height:1.6">從 go2rtc 加入其它鏡頭：選取串流後測試連線，通過即可加入監控。</div>
+        <div class="cam-section-title">已加入監控</div>
+        <div class="cam-list" id="camMonitored"></div>
+        <div class="cam-section-title">go2rtc 其它串流 <input id="camFilter" type="search" placeholder="搜尋串流名稱" autocomplete="off"></div>
+        <div class="cam-list" id="camAvailable"><span class="muted">載入中…</span></div>
+        <div id="camTestResult" class="muted" style="font-size:13px;margin-top:12px;min-height:20px"></div>
       </div>
     </div>
   </div>
@@ -451,7 +487,7 @@
       }
     };
 
-    const roi = { camera: null, rect: null, drag: null };
+    const roi = { camera: null, rect: null, drag: null, lineY: 0.79, dir: 'down', lineDrag: false };
 
     function roiImageUrl(camera) {
       try {
@@ -474,6 +510,12 @@
       rect.style.height = (h * 100) + '%';
     }
 
+    function drawGate() {
+      const line = $('gateLine');
+      line.style.top = (roi.lineY * 100) + '%';
+      document.querySelectorAll('#dirButtons button').forEach((b) => b.classList.toggle('on', b.dataset.dir === roi.dir));
+    }
+
     function roiPoint(e) {
       const img = $('roiImage');
       const r = img.getBoundingClientRect();
@@ -488,15 +530,23 @@
       if (!camera) return;
       roi.camera = camera.id;
       roi.rect = camera.roi ? [...camera.roi] : null;
+      roi.lineY = Math.max(0, Math.min(1, (camera.line_y || 0) / (camera.height || 1)));
+      roi.dir = camera.enter_direction === 'up' ? 'up' : 'down';
       $('roiImage').src = roiImageUrl(camera);
       $('roiModal').classList.add('open');
       drawRoi();
+      drawGate();
     }
 
     $('roiBtn').onclick = openRoi;
     $('roiClose').onclick = () => $('roiModal').classList.remove('open');
     $('roiModal').onclick = (e) => { if (e.target === $('roiModal')) $('roiModal').classList.remove('open'); };
     $('roiStage').addEventListener('pointerdown', (e) => {
+      if (e.target === $('gateLine')) {
+        roi.lineDrag = true;
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
       const p = roiPoint(e);
       roi.drag = p;
@@ -504,6 +554,12 @@
       drawRoi();
     });
     $('roiStage').addEventListener('pointermove', (e) => {
+      if (roi.lineDrag) {
+        const p = roiPoint(e);
+        roi.lineY = Math.max(0.05, Math.min(0.98, p[1]));
+        drawGate();
+        return;
+      }
       if (!roi.drag) return;
       const p = roiPoint(e);
       const x = Math.min(roi.drag[0], p[0]);
@@ -513,17 +569,33 @@
       roi.rect = [x, y, Math.min(w, 1 - x), Math.min(h, 1 - y)];
       drawRoi();
     });
-    window.addEventListener('pointerup', () => { roi.drag = null; });
+    window.addEventListener('pointerup', () => { roi.drag = null; roi.lineDrag = false; });
+    document.querySelectorAll('#dirButtons button').forEach((b) => {
+      b.onclick = () => { roi.dir = b.dataset.dir; drawGate(); };
+    });
     async function saveRoi(value) {
       if (!roi.camera) return;
       const r = await fetch('/api/cameras/' + encodeURIComponent(roi.camera) + '/roi', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({roi: value}),
       });
       if (!r.ok) throw new Error('roi save failed');
-      await loadCameras();
-      $('roiModal').classList.remove('open');
     }
-    $('roiSave').onclick = async () => { try { await saveRoi(roi.rect); } catch (e) { $('statusText').textContent = 'ROI 儲存失敗'; } };
+    async function saveGate(camera) {
+      const line_y = Math.round(roi.lineY * camera.height);
+      const r = await fetch('/api/cameras/' + encodeURIComponent(camera.id) + '/gate', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({line_y, enter_direction: roi.dir}),
+      });
+      if (!r.ok) throw new Error('gate save failed');
+    }
+    $('roiSave').onclick = async () => {
+      const camera = state.cameras.find((c) => c.id === roi.camera);
+      if (!camera) return;
+      try {
+        await saveRoi(roi.rect);
+        await saveGate(camera);
+        $('statusText').textContent = '已儲存';
+      } catch (e) { $('statusText').textContent = '儲存失敗'; }
+    };
     $('roiClear').onclick = async () => { roi.rect = null; drawRoi(); try { await saveRoi(null); } catch (e) { $('statusText').textContent = 'ROI 清除失敗'; } };
     $('roiToggle').onclick = () => {
       showRoi = !showRoi;
@@ -531,6 +603,124 @@
       drawLiveRoi();
     };
     window.addEventListener('resize', drawLiveRoi);
+
+    const camPanel = { streams: [], filter: '', testing: '' };
+
+    async function loadGo2rtc() {
+      const box = $('camAvailable');
+      box.innerHTML = '<span class="muted">載入中…</span>';
+      try {
+        const r = await fetch('/api/go2rtc/streams', { cache: 'no-store' });
+        const d = await r.json();
+        camPanel.streams = (d.streams || []).filter((s) => !s.configured);
+        renderCamPanel();
+      } catch (e) {
+        box.innerHTML = '<span class="muted">go2rtc 連線失敗</span>';
+      }
+    }
+
+    function renderCamPanel() {
+      const monitored = $('camMonitored');
+      monitored.innerHTML = state.cameras.map((c) => {
+        const active = c.id === activeCamera;
+        return `<div class="cam-row"><span class="name">${esc(c.label)}</span><span class="src">${esc(c.id)} · ${c.width}x${c.height}</span>${active ? '<span class="tag">使用中</span>' : `<button class="btn small" data-switch="${esc(c.id)}">設為使用中</button>`}${c.managed && !active ? `<button class="btn small" data-del="${esc(c.id)}">移除</button>` : ''}</div>`;
+      }).join('');
+      monitored.querySelectorAll('[data-switch]').forEach((b) => { b.onclick = () => switchTo(b.dataset.switch); });
+      monitored.querySelectorAll('[data-del]').forEach((b) => { b.onclick = () => removeCam(b.dataset.del); });
+      const avail = $('camAvailable');
+      const q = camPanel.filter.toLowerCase();
+      const items = camPanel.streams.filter((s) => !q || s.name.toLowerCase().includes(q));
+      if (!items.length) { avail.innerHTML = '<span class="muted">沒有其它串流</span>'; return; }
+      avail.innerHTML = items.map((s) => {
+        const h264 = s.name.endsWith('_h264');
+        const badge = h264 ? '<span class="tag">H.264</span>' : '<span class="tag warn">未轉碼</span>';
+        const busy = camPanel.testing === s.name;
+        return `<div class="cam-row"><span class="name">${esc(s.name)}</span><span class="src">${esc(s.source)}</span>${badge}<button class="btn small" data-test="${esc(s.name)}"${busy ? ' disabled' : ''}>${busy ? '測試中…' : '測試'}</button><button class="btn small" data-add="${esc(s.name)}"${busy ? ' disabled' : ''}>加入</button></div>`;
+      }).join('');
+      avail.querySelectorAll('[data-test]').forEach((b) => { b.onclick = () => testCam(b.dataset.test); });
+      avail.querySelectorAll('[data-add]').forEach((b) => { b.onclick = () => addCam(b.dataset.add); });
+    }
+
+    async function testCam(name) {
+      camPanel.testing = name;
+      renderCamPanel();
+      $('camTestResult').textContent = '測試 ' + name + ' …';
+      try {
+        const r = await fetch('/api/cameras/test', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stream: name}) });
+        const d = await r.json();
+        $('camTestResult').textContent = d.ok ? '✓ ' + name + ' 就緒：' + d.width + 'x' + d.height + ' @ ' + d.fps + 'fps，可以加入' : '✗ ' + name + ' 無法連線：' + (d.error || '未知錯誤');
+      } catch (e) {
+        $('camTestResult').textContent = '✗ ' + name + ' 測試失敗';
+      } finally {
+        camPanel.testing = '';
+        renderCamPanel();
+      }
+    }
+
+    async function addCam(name) {
+      $('camTestResult').textContent = '加入 ' + name + ' 中（會先測試）…';
+      try {
+        const t = await fetch('/api/cameras/test', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stream: name}) });
+        const probe = await t.json();
+        if (!probe.ok) { $('camTestResult').textContent = '✗ ' + name + ' 無法連線：' + (probe.error || ''); return; }
+        const r = await fetch('/api/cameras', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stream: name, probe}) });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); $('camTestResult').textContent = '✗ 加入失敗：' + (e.detail || ''); return; }
+        const d = await r.json();
+        state.cameras = d.cameras || [];
+        camPanel.streams = camPanel.streams.filter((s) => s.name !== name);
+        cameraProgrammatic = true;
+        $('cameraSelect').innerHTML = state.cameras.map((c) => '<option value="' + esc(c.id) + '"' + (c.id === d.active ? ' selected' : '') + '>' + esc(c.label) + '</option>').join('');
+        $('cameraSelect').value = d.active;
+        setTimeout(() => { cameraProgrammatic = false; }, 700);
+        renderCamPanel();
+        $('camTestResult').textContent = '✓ ' + name + ' 已加入（' + probe.width + 'x' + probe.height + '）。在鏡頭下拉選單選它並套用即可開始辨識。';
+      } catch (e) {
+        $('camTestResult').textContent = '✗ 加入 ' + name + ' 失敗';
+      }
+    }
+
+    async function removeCam(name) {
+      if (!confirm('移除鏡頭 ' + name + '？歷史紀錄會保留。')) return;
+      try {
+        const r = await fetch('/api/cameras/' + encodeURIComponent(name) + '/remove', { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) { $('camTestResult').textContent = '✗ ' + (d.detail || '移除失敗'); return; }
+        state.cameras = d.cameras || [];
+        await loadGo2rtc();
+        cameraProgrammatic = true;
+        $('cameraSelect').innerHTML = state.cameras.map((c) => '<option value="' + esc(c.id) + '"' + (c.id === d.active ? ' selected' : '') + '>' + esc(c.label) + '</option>').join('');
+        $('cameraSelect').value = d.active;
+        setTimeout(() => { cameraProgrammatic = false; }, 700);
+        $('camTestResult').textContent = name + ' 已移除';
+      } catch (e) { $('camTestResult').textContent = '移除失敗'; }
+    }
+
+    async function switchTo(id) {
+      try {
+        const r = await fetch('/api/cameras/' + encodeURIComponent(id), { method: 'POST', headers: {'X-ALPR-Switch': '1'} });
+        if (!r.ok) throw new Error('switch failed');
+        const d = await r.json();
+        activeCamera = d.active;
+        cameraProgrammatic = true;
+        $('cameraSelect').value = d.active;
+        setTimeout(() => { cameraProgrammatic = false; }, 700);
+        const current = (d.cameras || []).find((c) => c.id === d.active);
+        if (current) { setLive(current.live_url); setCameraLabel(current.label); }
+        $('camTestResult').textContent = '已切到 ' + (current ? current.label : d.active) + '，10–30 秒內開始出圖';
+        renderCamPanel();
+        setTimeout(refreshStatus, 1200);
+      } catch (e) { $('camTestResult').textContent = '切換失敗'; }
+    }
+
+    $('camBtn').onclick = () => {
+      renderCamPanel();
+      $('camTestResult').textContent = '';
+      $('camModal').classList.add('open');
+      loadGo2rtc();
+    };
+    $('camClose').onclick = () => $('camModal').classList.remove('open');
+    $('camModal').onclick = (e) => { if (e.target === $('camModal')) $('camModal').classList.remove('open'); };
+    $('camFilter').addEventListener('input', () => { camPanel.filter = $('camFilter').value; renderCamPanel(); });
 
     let retentionDays = Number($('retainDays').textContent) || 7;
 

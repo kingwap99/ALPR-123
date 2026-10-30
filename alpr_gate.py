@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter, deque
 from contextlib import asynccontextmanager
@@ -175,6 +176,69 @@ def safe_int(value: Any, default: int) -> int:
         return default
 
 
+STREAM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def parse_stream_name(value: Any) -> Optional[str]:
+    """Sanitize a go2rtc stream name before it becomes part of a URL."""
+    name = str(value or "").strip()
+    return name if STREAM_NAME_RE.fullmatch(name) else None
+
+
+def strip_credentials(url: str) -> str:
+    """Remove user:password from a URL before exposing it to the UI."""
+    return re.sub(r"://[^@/]+@", "://***@", url)
+
+
+def rtsp_auth(url: str) -> tuple[str, str]:
+    """Return (user, password) embedded in an RTSP URL, URL-decoded."""
+    try:
+        parts = urllib.parse.urlparse(url)
+        return urllib.parse.unquote(parts.username or ""), urllib.parse.unquote(parts.password or "")
+    except ValueError:
+        return "", ""
+
+
+def probe_stream(ffprobe: str, rtsp_url: str, timeout: float = 12.0) -> dict[str, Any]:
+    """Probe an RTSP source and report its video size and frame rate."""
+    cmd = [
+        ffprobe,
+        "-v", "error",
+        "-rtsp_transport", "tcp",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,r_frame_rate",
+        "-of", "json",
+        rtsp_url,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "連線逾時（12 秒）"}
+    except OSError as exc:
+        return {"ok": False, "error": f"ffprobe 無法執行：{exc}"}
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        return {"ok": False, "error": strip_credentials(err)[:160] or "ffprobe 失敗"}
+    try:
+        info = json.loads(proc.stdout.decode("utf-8", "replace") or "{}")
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "ffprobe 輸出無法解析"}
+    streams = info.get("streams") or []
+    if not streams:
+        return {"ok": False, "error": "沒有視訊串流"}
+    first = streams[0]
+    width = safe_int(first.get("width"), 0)
+    height = safe_int(first.get("height"), 0)
+    try:
+        num, den = str(first.get("r_frame_rate") or "0/1").split("/")
+        fps = round(float(num) / float(den), 2) if float(den) else 0.0
+    except ValueError:
+        fps = 0.0
+    if width < 320 or height < 240:
+        return {"ok": False, "error": f"解析度過小（{width}x{height}）"}
+    return {"ok": True, "width": width, "height": height, "fps": fps}
+
+
 def parse_retention(value: Any) -> Optional[int]:
     """Return a valid snapshot retention in days, or None."""
     days = safe_int(value, 0)
@@ -310,6 +374,8 @@ class Config:
     storage: StorageCfg
     api: ApiCfg
     plates: PlateCfg
+    go2rtc_api_url: str
+    go2rtc_rtsp_base: str
     raw: dict[str, Any]
 
 
@@ -357,6 +423,25 @@ def load_config(path: Path) -> Config:
 
     web = raw.get("web") or {}
     base_live_url = str(web.get("live_url") or "http://127.0.0.1:1984/stream.html?src=garage_h264")
+    # go2rtc endpoints are derived from the live URL host so the camera
+    # panel can list streams and probe new sources without extra config.
+    go2rtc_api_url = str(web.get("go2rtc_api") or "").strip().rstrip("/")
+    go2rtc_rtsp_base = str(web.get("go2rtc_rtsp") or "").strip().rstrip("/")
+    if not go2rtc_api_url:
+        try:
+            live_parts = urllib.parse.urlparse(base_live_url)
+            if live_parts.scheme.startswith("http"):
+                go2rtc_api_url = f"{live_parts.scheme}://{live_parts.netloc}"
+        except ValueError:
+            go2rtc_api_url = "http://127.0.0.1:1984"
+    if not go2rtc_rtsp_base:
+        try:
+            first_rtsp = urllib.parse.urlparse(str(cam.get("rtsp_url") or ""))
+            host = first_rtsp.hostname or "127.0.0.1"
+            port = first_rtsp.port or 8554
+            go2rtc_rtsp_base = f"rtsp://{host}:{port}"
+        except ValueError:
+            go2rtc_rtsp_base = "rtsp://127.0.0.1:8554"
     cameras_raw = raw.get("cameras") or {}
     profiles: dict[str, CameraProfile] = {}
     if isinstance(cameras_raw, dict) and cameras_raw:
@@ -451,6 +536,8 @@ def load_config(path: Path) -> Config:
             pattern=re.compile(str(plates.get("pattern") or r"^[A-Z]{2,3}[0-9]{4}$")),
             emit_unknown=bool(plates.get("emit_unknown", False)),
         ),
+        go2rtc_api_url=go2rtc_api_url,
+        go2rtc_rtsp_base=go2rtc_rtsp_base,
         raw=raw,
     )
     return cfg
@@ -1098,6 +1185,31 @@ class Service:
                     cfg.cameras[cid].roi = parse_roi(roi_value)
         except Exception:
             pass
+        # UI-managed cameras live in an overlay file so config.yaml stays the
+        # factory baseline. Entries here were validated with ffprobe on add.
+        self.cameras_overlay_path = self.data_dir / "cameras.json"
+        self.verified: dict[str, bool] = {}
+        self.overlay_ids: set[str] = set()
+        self.tweaks: dict[str, dict[str, Any]] = {}
+        try:
+            overlay = json.loads(self.cameras_overlay_path.read_text())
+            for entry in overlay.get("cameras") or []:
+                profile = self.profile_from_payload(entry)
+                if profile is not None:
+                    cfg.cameras[profile.id] = profile
+                    self.overlay_ids.add(profile.id)
+            for cid, ok in (overlay.get("verified") or {}).items():
+                self.verified[cid] = bool(ok)
+            for cid, tweak in (overlay.get("tweaks") or {}).items():
+                if cid in cfg.cameras and isinstance(tweak, dict):
+                    self.tweaks[cid] = tweak
+                    profile = cfg.cameras[cid]
+                    if "line_y" in tweak:
+                        profile.line_y = max(0, min(profile.camera.height - 1, safe_int(tweak.get("line_y"), profile.line_y)))
+                    if str(tweak.get("enter_direction") or "").lower() in ("up", "down"):
+                        profile.enter_direction = str(tweak["enter_direction"]).lower()
+        except Exception:
+            pass
         self.profile_id = cfg.active_camera
         state_path = self.data_dir / "active_camera.json"
         try:
@@ -1183,6 +1295,7 @@ class Service:
         )
 
     def cameras_info(self) -> dict[str, Any]:
+        overlay_ids = self.overlay_ids
         return {
             "active": self.profile_id,
             "cameras": [
@@ -1195,10 +1308,169 @@ class Service:
                     "roi": list(profile.roi) if profile.roi else None,
                     "width": profile.camera.width,
                     "height": profile.camera.height,
+                    "managed": profile.id in overlay_ids,
                 }
                 for profile in self.cfg.cameras.values()
             ],
         }
+
+    def profile_from_payload(self, entry: dict[str, Any]) -> Optional[CameraProfile]:
+        """Build a CameraProfile from a UI payload; returns None when invalid."""
+        stream = parse_stream_name(entry.get("stream"))
+        cid = parse_stream_name(entry.get("id") or stream)
+        if not cid:
+            return None
+        rtsp_url = str(entry.get("rtsp_url") or "").strip()
+        if not rtsp_url.startswith("rtsp://"):
+            rtsp_url = f"{self.cfg.go2rtc_rtsp_base}/{stream}" if stream else ""
+        if not rtsp_url.startswith("rtsp://"):
+            return None
+        width = safe_int(entry.get("width"), self.cfg.camera.width)
+        height = safe_int(entry.get("height"), self.cfg.camera.height)
+        if width < 320 or height < 240:
+            return None
+        live_stream = str(entry.get("live_stream") or "").strip() or parse_stream_name(entry.get("live_stream"))
+        if not live_stream:
+            live_stream = stream or cid
+        live_base = self.cfg.go2rtc_api_url or f"http://127.0.0.1:1984"
+        enter = str(entry.get("enter_direction") or "down").lower()
+        if enter not in ("up", "down"):
+            enter = "down"
+        camera = CameraCfg(
+            name=cid,
+            rtsp_url=rtsp_url,
+            width=width,
+            height=height,
+            fps=max(0.5, safe_float(entry.get("fps"), 2.0)),
+            ffmpeg=str(self.cfg.camera.ffmpeg),
+            startup_timeout=self.cfg.camera.startup_timeout,
+            read_timeout=self.cfg.camera.read_timeout,
+        )
+        return CameraProfile(
+            id=cid,
+            label=str(entry.get("label") or cid)[:40],
+            camera=camera,
+            line_y=max(0, min(height - 1, safe_int(entry.get("line_y"), int(height * 0.79)))),
+            margin=max(5, safe_int(entry.get("margin"), 25)),
+            enter_direction=enter,
+            live_url=f"{live_base}/stream.html?src={urllib.parse.quote(live_stream)}",
+            roi=parse_roi(entry.get("roi")),
+            clip_url=str(entry.get("clip_url") or "").strip() or rtsp_url,
+        )
+
+    def _save_cameras_overlay(self) -> None:
+        entries = []
+        for profile in self.cfg.cameras.values():
+            if profile.id not in self.overlay_ids:
+                continue
+            entries.append(
+                {
+                    "id": profile.id,
+                    "label": profile.label,
+                    "rtsp_url": profile.camera.rtsp_url,
+                    "live_stream": urllib.parse.parse_qs(urllib.parse.urlparse(profile.live_url).query).get("src", [profile.id])[0],
+                    "width": profile.camera.width,
+                    "height": profile.camera.height,
+                    "fps": profile.camera.fps,
+                    "line_y": profile.line_y,
+                    "enter_direction": profile.enter_direction,
+                    "roi": list(profile.roi) if profile.roi else None,
+                }
+            )
+        payload = {"cameras": entries, "verified": self.verified, "tweaks": self.tweaks}
+        tmp = self.cameras_overlay_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+        tmp.replace(self.cameras_overlay_path)
+
+    def add_camera(self, payload: dict[str, Any]) -> tuple[Optional[CameraProfile], str]:
+        """Validate with ffprobe, then register and persist a new camera."""
+        stream = parse_stream_name(payload.get("stream"))
+        if not stream:
+            return None, "名稱不合法（僅限英數字、點、底線、連字號）"
+        if stream in self.cfg.cameras:
+            return None, f"{stream} 已在監控清單中"
+        probe = payload.get("probe") or {}
+        width = safe_int(probe.get("width"), 0)
+        height = safe_int(probe.get("height"), 0)
+        if not probe.get("ok") or width < 320 or height < 240:
+            return None, "請先通過連線測試再加入"
+        profile = self.profile_from_payload(
+            {
+                "id": stream,
+                "stream": stream,
+                "label": payload.get("label") or stream,
+                "width": width,
+                "height": height,
+                "fps": safe_float(probe.get("fps"), 2.0),
+                "enter_direction": payload.get("enter_direction") or "down",
+                "line_y": safe_int(payload.get("line_y"), int(height * 0.79)),
+            }
+        )
+        if profile is None:
+            return None, "設定不完整"
+        self.cfg.cameras[profile.id] = profile
+        self.overlay_ids.add(profile.id)
+        self.verified[profile.id] = True
+        self._save_cameras_overlay()
+        LOG.info("camera %s added via UI (%sx%s)", profile.id, width, height)
+        return profile, ""
+
+    def remove_camera(self, camera_id: str) -> tuple[bool, str]:
+        if camera_id not in self.cfg.cameras:
+            return False, "unknown camera"
+        if camera_id == self.profile_id:
+            return False, "無法移除使用中鏡頭"
+        if camera_id not in self.overlay_ids:
+            return False, "config.yaml 內建的鏡頭請直接編輯設定檔"
+        profile = self.cfg.cameras.pop(camera_id)
+        self.verified.pop(camera_id, None)
+        try:
+            state = json.loads(self.roi_path.read_text()) if self.roi_path.exists() else {}
+            state.pop(camera_id, None)
+            self.roi_path.write_text(json.dumps(state))
+        except Exception:
+            pass
+        self._save_cameras_overlay()
+        LOG.info("camera %s removed via UI", camera_id)
+        return True, ""
+
+    def go2rtc_streams(self) -> list[dict[str, Any]]:
+        """Proxy go2rtc /api/streams and hide credentials."""
+        url = f"{self.cfg.go2rtc_api_url}/api/streams"
+        req = urllib.request.Request(url, headers={"User-Agent": "alpr-123"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        items: list[dict[str, Any]] = []
+        for name, info in (data or {}).items():
+            producers = (info or {}).get("producers") or []
+            source = strip_credentials(str((producers[0] if producers else {}).get("url") or ""))
+            items.append(
+                {
+                    "name": name,
+                    "source": source,
+                    "h264": name.endswith("_h264") or "h264" in source,
+                    "configured": name in self.cfg.cameras,
+                }
+            )
+        items.sort(key=lambda item: (item["configured"], item["name"]))
+        return items
+
+    def test_stream(self, stream: str) -> dict[str, Any]:
+        name = parse_stream_name(stream)
+        if not name:
+            return {"ok": False, "error": "名稱不合法"}
+        rtsp_url = f"{self.cfg.go2rtc_rtsp_base}/{name}"
+        user, password = rtsp_auth(self.camera_cfg.rtsp_url)
+        ffprobe = str(Path(self.camera_cfg.ffmpeg).with_name("ffprobe"))
+        if user:
+            rtsp_url = f"rtsp://{urllib.parse.quote(user, safe='')}:{urllib.parse.quote(password, safe='')}@{rtsp_url[len('rtsp://'):]}"
+        result = probe_stream(ffprobe, rtsp_url)
+        if not result.get("ok"):
+            # Without credentials go2rtc may still serve the stream locally.
+            bare = probe_stream(ffprobe, f"{self.cfg.go2rtc_rtsp_base}/{name}")
+            if bare.get("ok"):
+                return bare
+        return result
 
     def switch_camera(self, camera_id: str) -> bool:
         if camera_id not in self.cfg.cameras:
@@ -1261,6 +1533,28 @@ class Service:
                 self.motion = MotionGate(self.cfg.motion)
                 self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
         LOG.info("roi for %s set to %s", camera_id, parsed)
+        return True
+
+    def set_gate(self, camera_id: str, line_y: Optional[int], enter_direction: Optional[str]) -> bool:
+        """Persist the gate line position and direction for a camera."""
+        if camera_id not in self.cfg.cameras:
+            return False
+        profile = self.cfg.cameras[camera_id]
+        with self.switch_lock:
+            if line_y is not None:
+                profile.line_y = max(0, min(profile.camera.height - 1, safe_int(line_y, profile.line_y)))
+            if str(enter_direction or "").lower() in ("up", "down"):
+                profile.enter_direction = str(enter_direction).lower()
+            tweak = self.tweaks.setdefault(camera_id, {})
+            tweak["line_y"] = profile.line_y
+            tweak["enter_direction"] = profile.enter_direction
+            self._save_cameras_overlay()
+            if camera_id == self.profile_id:
+                self.profile = profile
+                self.gate_cfg = self._gate_for(profile)
+                self.motion = MotionGate(self.cfg.motion)
+                self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
+        LOG.info("gate for %s line_y=%s enter=%s", camera_id, profile.line_y, profile.enter_direction)
         return True
 
     def _crop_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -1812,6 +2106,12 @@ def create_app(service: Service) -> FastAPI:
     def cameras(request: Request):
         return request.app.state.service.cameras_info()
 
+    # Registered before the {camera_id} routes so "test" is not read as an id.
+    @app.post("/api/cameras/test")
+    def test_camera(payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        return svc.test_stream(str(payload.get("stream") or ""))
+
     @app.post("/api/cameras/{camera_id}")
     def set_camera(camera_id: str, request: Request):
         svc: Service = request.app.state.service
@@ -1830,6 +2130,37 @@ def create_app(service: Service) -> FastAPI:
         if roi is not None and parse_roi(roi) is None:
             raise HTTPException(status_code=400, detail="invalid roi")
         svc.set_roi(camera_id, roi)
+        return svc.cameras_info()
+
+    @app.get("/api/go2rtc/streams")
+    def go2rtc_streams(request: Request):
+        svc: Service = request.app.state.service
+        try:
+            return {"streams": svc.go2rtc_streams()}
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"go2rtc 連線失敗：{exc}") from exc
+
+    @app.post("/api/cameras")
+    def add_camera(payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        profile, error = svc.add_camera(payload)
+        if profile is None:
+            raise HTTPException(status_code=400, detail=error or "add failed")
+        return svc.cameras_info()
+
+    @app.post("/api/cameras/{camera_id}/remove")
+    def remove_camera(camera_id: str, request: Request):
+        svc: Service = request.app.state.service
+        ok, error = svc.remove_camera(camera_id)
+        if not ok:
+            raise HTTPException(status_code=400, detail=error)
+        return svc.cameras_info()
+
+    @app.post("/api/cameras/{camera_id}/gate")
+    def set_camera_gate(camera_id: str, payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        if not svc.set_gate(camera_id, payload.get("line_y"), payload.get("enter_direction")):
+            raise HTTPException(status_code=404, detail="unknown camera")
         return svc.cameras_info()
 
     @app.get("/api/settings")

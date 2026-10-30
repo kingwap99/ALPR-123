@@ -82,6 +82,8 @@ Each camera has its own RTSP source, resolution, line, direction, live URL, and 
 
 The UI selector switches immediately. Programmatic selector updates during page load are guarded, so reloading the page does not send an accidental switch request. The service stops the current capture, starts the selected one, resets the tracker, and persists the choice in `active_camera.json`. The models stay loaded.
 
+The **Camera settings** panel lists every go2rtc stream on the same host (proxied through `/api/go2rtc/streams`, credentials stripped). **Test** runs ffprobe against `rtsp://<go2rtc>:8554/<name>`; only a stream that answers can be **Added**. UI-added cameras live in a `cameras.json` overlay next to the database, so `config.yaml` stays the factory baseline, and they survive restarts. They can be removed from the same panel; their history is kept. The ROI editor also drags the pink gate line and picks the enter direction, saved per camera via `/api/cameras/{id}/gate`.
+
 Recommended setup:
 
 - `garage` / test camera: 960×960, 2 fps ALPR stream, car parked in a known place.
@@ -139,6 +141,11 @@ An optional `panel_iframe` snippet is included in `examples/home_assistant/panel
 | GET | `/api/events` | History with `limit`, `offset`, `plate`, `direction`, `date` |
 | GET | `/api/cameras` | Camera list and active camera |
 | POST | `/api/cameras/{id}` | Switch active camera |
+| GET | `/api/go2rtc/streams` | go2rtc stream list for the camera panel (credentials stripped) |
+| POST | `/api/cameras/test` | Probe one go2rtc stream with ffprobe before adding it |
+| POST | `/api/cameras` | Add a monitored camera from the UI overlay |
+| POST | `/api/cameras/{id}/remove` | Remove a UI-added camera (history is kept) |
+| POST | `/api/cameras/{id}/gate` | Set the gate line position and enter direction |
 | POST | `/api/cameras/{id}/roi` | Set or clear a normalized ROI |
 | POST | `/api/integration/webhook` | Register the HA integration webhook |
 | DELETE | `/api/integration/webhook` | Clear the HA integration webhook |
