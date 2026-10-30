@@ -68,34 +68,61 @@ def format_plate_display(value: str | None) -> str:
     return f"{match.group(1)}-{match.group(2)}" if match else plate
 
 
-def draw_plate_card(image: np.ndarray, plate_text: str, font_path: Path = PLATE_FONT_PATH) -> np.ndarray:
-    """Draw a small reference plate using the bundled plate font."""
+def plate_is_dark(crop: np.ndarray, box: Any) -> bool:
+    """Decide the plate background from the OCR detection patch itself.
+
+    Ordinary cars have white plates with dark glyphs; commercial vehicles
+    (e.g. the DHL van) use black plates with white glyphs. The patch is
+    mostly background, so a low median brightness means a dark plate.
+    """
+    height, width = crop.shape[:2]
+    x1 = max(0, int(getattr(box, "x1", 0)))
+    y1 = max(0, int(getattr(box, "y1", 0)))
+    x2 = min(width, int(getattr(box, "x2", 0)))
+    y2 = min(height, int(getattr(box, "y2", 0)))
+    if x2 - x1 < 8 or y2 - y1 < 4:
+        return False
+    gray = cv2.cvtColor(crop[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    return bool(float(np.median(gray)) < 110.0)
+
+
+def draw_plate_card(
+    image: np.ndarray,
+    plate_text: str,
+    dark: bool = False,
+    font_path: Path = PLATE_FONT_PATH,
+) -> np.ndarray:
+    """Draw a small reference plate using the bundled plate font.
+
+    Set dark=True for the commercial-vehicle style: white glyphs on black.
+    """
     if not font_path.is_file() or not plate_text:
         return image
     height, width = image.shape[:2]
     plate_w = max(160, min(360, int(width * 0.36)))
-    plate_h = max(64, int(plate_w / 2.45))
+    # Real Taiwan plates are about 368x155 mm, so keep the card near 2.4:1.
+    plate_h = max(64, int(plate_w / 2.37))
     margin = max(10, int(height * 0.025))
     card = Image.new("RGBA", (plate_w, plate_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(card)
-    radius = max(8, int(plate_h * 0.12))
-    draw.rounded_rectangle((2, 2, plate_w - 3, plate_h - 3), radius=radius, fill=(247, 250, 255, 255), outline=(155, 168, 187, 255), width=max(2, plate_h // 45))
+    bg = (24, 26, 30, 255) if dark else (247, 250, 255, 255)
+    edge = (214, 220, 232, 255) if dark else (155, 168, 187, 255)
+    inner = (70, 76, 88, 255) if dark else (214, 223, 235, 255)
+    ink = (240, 243, 248, 255) if dark else (11, 19, 34, 255)
+    radius = max(6, int(plate_h * 0.07))
+    draw.rounded_rectangle((2, 2, plate_w - 3, plate_h - 3), radius=radius, fill=bg, outline=edge, width=max(2, plate_h // 45))
     inset = max(5, plate_h // 18)
-    draw.rounded_rectangle((inset, inset, plate_w - inset - 1, plate_h - inset - 1), radius=max(4, radius - 3), outline=(214, 223, 235, 255), width=1)
-    slot_w = max(12, plate_w // 16)
-    slot_h = max(2, plate_h // 45)
-    draw.rounded_rectangle((plate_w * 0.23 - slot_w / 2, inset + 3, plate_w * 0.23 + slot_w / 2, inset + 3 + slot_h), radius=slot_h, fill=(20, 26, 36, 255))
-    draw.rounded_rectangle((plate_w * 0.77 - slot_w / 2, inset + 3, plate_w * 0.77 + slot_w / 2, inset + 3 + slot_h), radius=slot_h, fill=(20, 26, 36, 255))
+    draw.rounded_rectangle((inset, inset, plate_w - inset - 1, plate_h - inset - 1), radius=max(4, radius - 3), outline=inner, width=1)
     # Real plates use one fixed slot per character, so a narrow glyph such as
     # "1" sits in the same pitch as the letters. Proportional advances made the
     # digits bunch up, so place every glyph in its own slot instead.
     chars = list(plate_text)
-    size = max(12, int(plate_h * 0.62))
+    size = max(12, int(plate_h * 0.60))
     while size > 8:
         font = ImageFont.truetype(str(font_path), size)
         slots = [size * PLATE_SLOT_RATIO * (PLATE_SEPARATOR_RATIO if c == "-" else 1.0) for c in chars]
         box = draw.textbbox((0, 0), plate_text, font=font)
-        if sum(slots) <= plate_w * 0.86 and box[3] - box[1] <= plate_h * 0.60:
+        if sum(slots) <= plate_w * 0.88 and box[3] - box[1] <= plate_h * 0.58:
             break
         size -= 2
     cursor = plate_w / 2 - sum(slots) / 2
@@ -105,14 +132,14 @@ def draw_plate_card(image: np.ndarray, plate_text: str, font_path: Path = PLATE_
             dot_w = max(3, round(size * 0.11))
             dot_h = max(3, round(size * 0.09))
             cx = cursor + slot / 2
-            cy = plate_h * 0.55
+            cy = plate_h * 0.52
             draw.rounded_rectangle(
                 (cx - dot_w / 2, cy - dot_h / 2, cx + dot_w / 2, cy + dot_h / 2),
                 radius=dot_h / 2,
-                fill=(11, 19, 34, 255),
+                fill=ink,
             )
         else:
-            draw.text((cursor + slot / 2, plate_h * 0.55), char, font=font, fill=(11, 19, 34, 255), anchor="mm")
+            draw.text((cursor + slot / 2, plate_h * 0.52), char, font=font, fill=ink, anchor="mm")
         cursor += slot
     base = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)).convert("RGBA")
     base.paste(card, (margin, height - plate_h - margin), card)
@@ -1054,6 +1081,8 @@ class Service:
         except Exception:
             pass
         self.store = Store(self.data_dir / "events.db")
+        # Background style per confirmed plate: True = dark (commercial) plate.
+        self.plate_styles: dict[str, bool] = {}
         self.integration_path = self.data_dir / "integration.json"
         self.webhook_url = ""
         try:
@@ -1375,6 +1404,7 @@ class Service:
             return None, 0.0
         best_plate: Optional[str] = None
         best_conf = 0.0
+        best_dark = False
         for result in plates:
             ocr = result.ocr
             if not ocr or not ocr.text:
@@ -1397,10 +1427,12 @@ class Service:
                 continue
             if conf > best_conf:
                 best_plate, best_conf = plate, conf
+                best_dark = det is not None and plate_is_dark(crop, box)
         if best_plate and best_plate not in self.cfg.plates.allow and self.cfg.plates.allow:
             LOG.info("observed non-allowlisted plate %s (%.3f)", best_plate, best_conf)
         if best_plate:
             LOG.info("plate candidate %s conf=%.3f", best_plate, best_conf)
+            self.plate_styles[best_plate] = best_dark
         return best_plate, best_conf
 
     def _on_event(self, plate: str, direction: str, confidence: float, track: Track, frame: np.ndarray) -> None:
@@ -1594,7 +1626,8 @@ class Service:
             cv2.putText(image, label, (max(8, x1), max(28, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
             cv2.line(image, (0, self.gate_cfg.line_y), (image.shape[1], self.gate_cfg.line_y), (80, 80, 255), 2)
             if card:
-                image = draw_plate_card(image, format_plate_display(plate))
+                dark = bool(self.plate_styles.get(normalize_plate(plate), False))
+                image = draw_plate_card(image, format_plate_display(plate), dark=dark)
             cv2.imwrite(str(path), image, [cv2.IMWRITE_JPEG_QUALITY, 86])
             self.last_snapshot_path = path
             return path
