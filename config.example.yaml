@@ -77,7 +77,7 @@ motion:
 animals:
   # Record a cat clip from the moment it enters the view until it leaves.
   cat: true
-  cat_conf: 0.45
+  cat_conf: 0.60
   cat_dedupe_seconds: 600
   cat_leave_seconds: 4      # stop this long after the last cat detection
   cat_clip_max_seconds: 180 # hard cap for one clip

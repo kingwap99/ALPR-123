@@ -400,7 +400,7 @@ def load_config(path: Path) -> Config:
         ),
         animals=AnimalCfg(
             cat=bool(animals.get("cat", True)),
-            cat_conf=max(0.1, safe_float(animals.get("cat_conf"), 0.45)),
+            cat_conf=max(0.1, safe_float(animals.get("cat_conf"), 0.60)),
             cat_dedupe_seconds=max(0.0, safe_float(animals.get("cat_dedupe_seconds"), 600.0)),
             cat_leave_seconds=max(1.0, safe_float(animals.get("cat_leave_seconds"), 4.0)),
             cat_clip_max_seconds=max(10.0, safe_float(animals.get("cat_clip_max_seconds"), 180.0)),
@@ -1042,11 +1042,15 @@ class Service:
             pass
         self.settings_path = self.data_dir / "settings.json"
         self.record_mode = parse_record_mode(cfg.gate.record_mode)
+        self.cat_conf = max(0.05, min(0.99, float(cfg.animals.cat_conf)))
         try:
             saved_settings = json.loads(self.settings_path.read_text())
             saved_mode = saved_settings.get("record_mode")
             if saved_mode:
                 self.record_mode = parse_record_mode(saved_mode)
+            saved_cat = saved_settings.get("cat_conf")
+            if saved_cat is not None:
+                self.cat_conf = max(0.05, min(0.99, float(saved_cat)))
         except Exception:
             pass
         self.store = Store(self.data_dir / "events.db")
@@ -1334,7 +1338,7 @@ class Service:
                 if str(det.label).lower() != "cat":
                     continue
                 conf = float(det.confidence)
-                if conf < self.cfg.animals.cat_conf:
+                if conf < self.cat_conf:
                     continue
                 box = det.bounding_box
                 x1 = max(0, int(box.x1))
@@ -1662,6 +1666,25 @@ class Service:
         LOG.info("event recording mode set to %s", value)
         return value
 
+    def set_cat_conf(self, value: Any) -> float:
+        try:
+            conf = float(value)
+        except (TypeError, ValueError):
+            raise ValueError("cat confidence must be a number between 0.05 and 0.99")
+        if not 0.05 <= conf <= 0.99:
+            raise ValueError("cat confidence must be between 0.05 and 0.99")
+        self.cat_conf = round(conf, 2)
+        try:
+            state: dict[str, Any] = {}
+            if self.settings_path.exists():
+                state = json.loads(self.settings_path.read_text())
+            state["cat_conf"] = self.cat_conf
+            self.settings_path.write_text(json.dumps(state))
+        except Exception as exc:
+            LOG.warning("could not persist cat confidence: %s", exc)
+        LOG.info("cat confidence threshold set to %.2f", self.cat_conf)
+        return self.cat_conf
+
     def _prune(self) -> None:
         try:
             cutoff = time.time() - self.retain_days * 86400
@@ -1702,6 +1725,7 @@ class Service:
             data["events_today"] = self.store.count_today()
             data["retain_days"] = self.retain_days
             data["record_mode"] = self.record_mode
+            data["cat_conf"] = self.cat_conf
         return data
 
     def healthy(self) -> bool:
@@ -1741,6 +1765,7 @@ def create_app(service: Service) -> FastAPI:
             .replace("__CAMERA_LABEL__", profile.label)
             .replace("__RETAIN_DAYS__", str(service.retain_days))
             .replace("__RECORD_MODE__", service.record_mode)
+            .replace("__CAT_CONF__", f"{service.cat_conf:.2f}")
         )
 
     @app.get("/favicon.ico")
@@ -1777,7 +1802,16 @@ def create_app(service: Service) -> FastAPI:
     @app.get("/api/settings")
     def get_settings(request: Request):
         svc: Service = request.app.state.service
-        return {"retain_days": svc.retain_days, "record_mode": svc.record_mode}
+        return {"retain_days": svc.retain_days, "record_mode": svc.record_mode, "cat_conf": svc.cat_conf}
+
+    @app.post("/api/settings/cat-conf")
+    def set_cat_conf(payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        try:
+            value = svc.set_cat_conf(payload.get("value"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"cat_conf": value}
 
     @app.post("/api/settings/record-mode")
     def set_record_mode(payload: dict[str, Any], request: Request):
