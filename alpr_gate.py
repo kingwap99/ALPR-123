@@ -199,6 +199,23 @@ def rtsp_auth(url: str) -> tuple[str, str]:
         return "", ""
 
 
+def probe_video_codec(ffprobe: str, path: Path, timeout: float = 10.0) -> str:
+    """Return the video codec name of a local media file, or empty on error."""
+    cmd = [
+        ffprobe,
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name",
+        "-of", "csv=p=0",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except Exception:
+        return ""
+    return proc.stdout.decode("utf-8", "replace").strip().lower()
+
+
 def probe_stream(ffprobe: str, rtsp_url: str, timeout: float = 12.0) -> dict[str, Any]:
     """Probe an RTSP source and report its video size and frame rate."""
     cmd = [
@@ -663,7 +680,7 @@ class Capture:
 
 
 class ClipRecorder:
-    """Record one clip by copying the stream, without re-encoding."""
+    """Record one clip by copying the stream; transcode HEVC to H.264 on stop."""
 
     def __init__(self, ffmpeg: str, url: str, path: Path, max_seconds: float) -> None:
         self.ffmpeg = ffmpeg
@@ -716,6 +733,40 @@ class ClipRecorder:
                 proc.kill()
             except Exception:
                 pass
+        self.ensure_browser_codec()
+
+    def ensure_browser_codec(self) -> None:
+        """Browsers cannot play HEVC; transcode the clip with VideoToolbox if needed."""
+        ffprobe = str(Path(self.ffmpeg).with_name("ffprobe"))
+        codec = probe_video_codec(ffprobe, self.path)
+        if codec not in ("hevc", "h265"):
+            return
+        tmp = self.path.with_suffix(".h264.mp4")
+        cmd = [
+            self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-i", str(self.path),
+            "-c:v", "h264_videotoolbox", "-b:v", "4M",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            "-movflags", "+faststart",
+            "-y", str(tmp),
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=180)
+        except Exception as exc:
+            LOG.warning("clip transcode failed for %s: %s", self.path.name, exc)
+            tmp.unlink(missing_ok=True)
+            return
+        if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size > 4096:
+            os.replace(tmp, self.path)
+            LOG.info("clip transcoded hevc->h264: %s", self.path.name)
+        else:
+            LOG.warning(
+                "clip transcode rejected for %s: %s",
+                self.path.name,
+                proc.stderr.decode("utf-8", "replace").strip()[:200],
+            )
+            tmp.unlink(missing_ok=True)
 
 
 class CatSentinel:

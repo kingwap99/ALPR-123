@@ -191,6 +191,8 @@ The cat confidence threshold is adjustable from the **貓咪 ≥** selector in t
 
 Cat watching is per camera. In the camera settings panel, every camera except the active plate camera shows a **貓偵測** button; press it to start or stop a cat sentinel for that camera. A sentinel captures its own low-resolution stream (about 1 fps) and only runs the model when it sees motion, so several cameras can be watched at the same time. The active camera keeps watching cats inside the main pipeline. Sentinels start automatically after a restart if their camera still has cat watch enabled, and each sighting is stored as a `cat` event tagged with the camera id.
 
+If a camera serves H.265 (HEVC), the copied clip would not play in most browsers, so the service checks the codec after each recording and transcodes HEVC clips to H.264 with VideoToolbox (hardware, near-zero CPU). H.264 clips are left untouched.
+
 Click **歷史截圖保留 … 天** under the page title to change how long snapshots and history rows are kept (1–365 days). Applying a value prunes older entries immediately, and the hourly cleanup keeps using it. The value is stored in `retention.json` next to the database, so it survives restarts; `retain_days` in `config.yaml` is only the default for a fresh install.
 
 ## 8. Service management
