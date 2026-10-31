@@ -199,6 +199,38 @@ def rtsp_auth(url: str) -> tuple[str, str]:
         return "", ""
 
 
+def boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    """True when two boxes overlap enough to be treated as the same object."""
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix = max(0, min(ax2, bx2) - max(ax1, bx1))
+    iy = max(0, min(ay2, by2) - max(ay1, by1))
+    inter = ix * iy
+    area_a = max(1, (ax2 - ax1) * (ay2 - ay1))
+    area_b = max(1, (bx2 - bx1) * (by2 - by1))
+    ratio = inter / min(area_a, area_b)
+    return ratio > 0.35
+
+
+def cat_confirmed(state: Any, box: tuple[int, int, int, int], now: float) -> bool:
+    """Require two nearby cat hits in consecutive checks before trusting one.
+
+    Corrupted H.265 frames show mosaic blocks that the detector reads as cats;
+    those blocks jump position between checks, while a real cat stays put. The
+    pending box is kept after confirmation so a lingering cat keeps confirming,
+    and callers clear it on frames without any cat hit.
+    """
+    prev = getattr(state, "pending_cat", None)
+    if prev is None or now - prev[1] > 12.0:
+        state.pending_cat = (box, now)
+        return False
+    if not boxes_overlap(prev[0], box):
+        state.pending_cat = (box, now)
+        return False
+    state.pending_cat = (box, now)
+    return True
+
+
 def probe_video_codec(ffprobe: str, path: Path, timeout: float = 10.0) -> str:
     """Return the video codec name of a local media file, or empty on error."""
     cmd = [
@@ -800,6 +832,7 @@ class CatSentinel:
         self.thread: Optional[threading.Thread] = None
         self.last_cat_seen = 0.0
         self.last_cat_at = 0.0
+        self.pending_cat: Optional[tuple[tuple[int, int, int, int], float]] = None
         self.clip: Optional[ClipRecorder] = None
         self.clip_started = 0.0
         self.clip_name = ""
@@ -877,8 +910,11 @@ class CatSentinel:
             if best is None or conf > best[0]:
                 best = (conf, (x1, y1, x2, y2))
         if best is None:
+            self.pending_cat = None
             return
         conf, box = best
+        if not cat_confirmed(self, box, now):
+            return
         self.last_cat_seen = now
         if self.clip is None and now - self.last_cat_at >= self.service.cfg.animals.cat_dedupe_seconds:
             self._start_clip(frame, box, conf, now)
@@ -1493,6 +1529,7 @@ class Service:
         self.last_prune = 0.0
         self.last_cat_at = 0.0
         self.last_cat_seen = 0.0
+        self.pending_cat: Optional[tuple[tuple[int, int, int, int], float]] = None
         self.clip: Optional[ClipRecorder] = None
         self.clip_started = 0.0
         self.clip_name = ""
@@ -1960,9 +1997,12 @@ class Service:
             if cats:
                 cats.sort(reverse=True, key=lambda item: item[0])
                 conf, box, _ = cats[0]
-                self.last_cat_seen = now
-                if self.clip is None and now - self.last_cat_at >= self.cfg.animals.cat_dedupe_seconds:
-                    self._start_cat_clip(frame, box, conf, now)
+                if cat_confirmed(self, box, now):
+                    self.last_cat_seen = now
+                    if self.clip is None and now - self.last_cat_at >= self.cfg.animals.cat_dedupe_seconds:
+                        self._start_cat_clip(frame, box, conf, now)
+            else:
+                self.pending_cat = None
 
         results: list[tuple[tuple[int, int, int, int], Optional[str], float]] = []
         for _, (x1, y1, x2, y2), _det in vehicles[: self.cfg.models.max_vehicles]:
