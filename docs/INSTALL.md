@@ -195,6 +195,8 @@ If a camera serves H.265 (HEVC), the copied clip would not play in most browsers
 
 A corrupted H.265 frame can show mosaic blocks that the detector reads as cats. To avoid these false positives, a cat is trusted only after two nearby hits in consecutive checks (overlapping boxes within 12 seconds); mosaic blocks jump position between frames and never confirm, while a real cat stays put and confirms on the second check. This applies to both the active camera and every sentinel.
 
+Two more layers guard against salt-like speckle caused by RTSP packet loss. The capture process runs ffmpeg with `-fflags nobuffer+discardcorrupt`, so packets the demuxer already marks as corrupt are dropped before decoding instead of turning into snow frames. In addition, before a cat hit is confirmed or an `unknown` snapshot is stored, the service measures the impulse-noise share inside the detection box; a box scoring above 0.055 (clean frames sit near 0.03) clears the pending cat, and an `unknown` crossing over that threshold is stored with `"snow": true`, shown as a 雪花 badge in the web UI and passed to Home Assistant as the `snow` attribute on `alpr_gate_event`.
+
 Click **歷史截圖保留 … 天** under the page title to change how long snapshots and history rows are kept (1–365 days). Applying a value prunes older entries immediately, and the hourly cleanup keeps using it. The value is stored in `retention.json` next to the database, so it survives restarts; `retain_days` in `config.yaml` is only the default for a fresh install.
 
 ## 8. Service management

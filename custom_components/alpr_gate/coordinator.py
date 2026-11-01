@@ -67,6 +67,7 @@ class AlprGateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 camera=status.get("camera", ""),
                 snapshot=f"{self.base_url}{event.get('snapshot_url', '')}" if event.get("snapshot_url") else "",
                 seen_at=event.get("ts"),
+                snow=bool(event.get("snow")),
             )
         return {"status": status, "event": event}
 
@@ -80,6 +81,7 @@ class AlprGateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         camera: str | None,
         snapshot: str | None,
         seen_at: str | None,
+        snow: bool = False,
     ) -> None:
         key = (seen_at, plate, direction)
         if key == self.last_event_key:
@@ -109,6 +111,7 @@ class AlprGateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             camera=payload.get("camera"),
             snapshot=payload.get("snapshot"),
             seen_at=payload.get("seen_at"),
+            snow=bool(payload.get("snow")),
         )
         data = dict(self.data or {})
         status = dict(data.get("status") or {})

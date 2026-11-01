@@ -212,6 +212,24 @@ def boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) ->
     return ratio > 0.35
 
 
+def snow_level(crop: np.ndarray) -> float:
+    """Impulse-noise share of a crop; corrupted (snow) frames score high.
+
+    RTSP packet loss makes the H.264 decoder emit salt-like speckle. Real
+    scenes, even dark or noisy ones, stay under ~0.05; snow frames measured
+    0.04-0.12 on detection crops and the clean baseline is ~0.037.
+    """
+    if crop.size == 0:
+        return 0.0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    med = cv2.medianBlur(gray, 5).astype(np.float32)
+    diff = np.abs(gray.astype(np.float32) - med)
+    return float((diff > 60).mean())
+
+
+SNOW_THRESHOLD = 0.055
+
+
 def cat_confirmed(state: Any, box: tuple[int, int, int, int], now: float) -> bool:
     """Require two nearby cat hits in consecutive checks before trusting one.
 
@@ -633,7 +651,7 @@ class Capture:
             "-loglevel",
             "error",
             "-fflags",
-            "nobuffer",
+            "nobuffer+discardcorrupt",
             "-flags",
             "low_delay",
             "-rtsp_transport",
@@ -913,6 +931,11 @@ class CatSentinel:
             self.pending_cat = None
             return
         conf, box = best
+        x1, y1, x2, y2 = box
+        if snow_level(frame[y1:y2, x1:x2]) > SNOW_THRESHOLD:
+            # salt-like speckle from packet loss; the model reads it as a cat
+            self.pending_cat = None
+            return
         if not cat_confirmed(self, box, now):
             return
         self.last_cat_seen = now
@@ -1400,6 +1423,7 @@ class Store:
                     "clip": payload.get("clip") or "",
                     "clip_url": f"/clips/{payload['clip']}" if payload.get("clip") else "",
                     "test": bool(payload.get("test")),
+                    "snow": bool(payload.get("snow")),
                 }
             )
         return events, int(total_row[0]) if total_row else 0
@@ -1997,7 +2021,10 @@ class Service:
             if cats:
                 cats.sort(reverse=True, key=lambda item: item[0])
                 conf, box, _ = cats[0]
-                if cat_confirmed(self, box, now):
+                bx1, by1, bx2, by2 = box
+                if snow_level(frame[by1:by2, bx1:bx2]) > SNOW_THRESHOLD:
+                    self.pending_cat = None
+                elif cat_confirmed(self, box, now):
                     self.last_cat_seen = now
                     if self.clip is None and now - self.last_cat_at >= self.cfg.animals.cat_dedupe_seconds:
                         self._start_cat_clip(frame, box, conf, now)
@@ -2083,6 +2110,11 @@ class Service:
     def _on_unknown(self, direction: str, track: Track, frame: np.ndarray) -> None:
         """Record a gate crossing whose plate was never confirmed."""
         seen_at = iso_now()
+        x1, y1, x2, y2 = track.bbox
+        speckle = snow_level(frame[y1:y2, x1:x2])
+        snow = speckle > SNOW_THRESHOLD
+        if snow:
+            LOG.info("unknown event flagged as snow (speckle=%.3f) track=%s", speckle, track.id)
         snapshot = self._save_snapshot(frame, track, "UNKNOWN", direction, 0.0, card=False)
         snapshot_url = ""
         if snapshot and self.cfg.ha.public_base_url:
@@ -2097,6 +2129,8 @@ class Service:
             "seen_at": seen_at,
             "track_id": track.id,
         }
+        if snow:
+            payload["snow"] = True
         with self.lock:
             self.status["last_event"] = "unknown"
             self.status["last_seen"] = seen_at
