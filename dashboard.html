@@ -127,6 +127,20 @@
     .retention-presets { display: flex; gap: 7px; flex-wrap: wrap; }
     .retention-presets .btn { padding: 6px 10px; font-size: 12px; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+    .lw-field { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-size: 13px; }
+    .lw-field input[type="text"], .lw-field input[type="password"], .lw-field input[type="number"] { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; font: inherit; font-size: 13px; outline: none; }
+    .lw-field input:focus { border-color: var(--accent); }
+    .lw-field .grow { flex: 1; min-width: 220px; }
+    .lw-rows { display: grid; gap: 8px; margin-top: 4px; }
+    .lw-row { display: flex; align-items: center; gap: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: 9px 11px; font-size: 13px; flex-wrap: wrap; }
+    .lw-row input[type="text"] { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 13px; outline: none; }
+    .lw-row input.plate { width: 118px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; text-transform: uppercase; }
+    .lw-row input.chat { flex: 1; min-width: 140px; }
+    .lw-row .meta { width: 100%; color: var(--muted); font-size: 11px; }
+    .lw-history { margin-top: 6px; font-size: 12px; color: var(--muted); display: grid; gap: 4px; max-height: 130px; overflow: auto; }
+    .lw-history .ok { color: #5fe0b8; }
+    .lw-history .fail { color: #ff8ba0; }
+    .lw-switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; white-space: nowrap; }
     @media (max-width: 900px) {
       .top { grid-template-columns: 1fr; }
       .live-frame { aspect-ratio: 4 / 3; }
@@ -149,6 +163,7 @@
       <div class="head-right">
         <button class="btn" id="roiBtn">偵測範圍</button>
         <button class="btn" id="camBtn">鏡頭設定</button>
+        <button class="btn" id="lineWatchBtn">LINE 通知</button>
         <div class="cam-picker"><span>記錄</span><select id="recordMode" aria-label="記錄模式"><option value="all">全部經過</option><option value="crossing">只看跨越</option></select></div>
         <div class="cam-picker"><span>貓咪 ≥</span><select id="catConf" aria-label="貓咪信心門檻"></select></div>
         <div class="cam-picker"><span>監測鏡頭</span><select id="cameraSelect" aria-label="監測鏡頭" autocomplete="off"></select></div>
@@ -253,6 +268,39 @@
         <div class="cam-section-title">go2rtc 其它串流 <input id="camFilter" type="search" placeholder="搜尋串流名稱" autocomplete="off"></div>
         <div class="cam-list" id="camAvailable"><span class="muted">載入中…</span></div>
         <div id="camTestResult" class="muted" style="font-size:13px;margin-top:12px;min-height:20px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="lwModal" role="dialog" aria-modal="true" aria-labelledby="lwTitle">
+    <div class="modal-box">
+      <button class="modal-close" id="lwClose" aria-label="關閉">×</button>
+      <div class="modal-body">
+        <h3 id="lwTitle">LINE 車牌通知</h3>
+        <div class="muted" style="font-size:13px;line-height:1.6">偵測到下方車號時，會把截圖與文字自動貼到指定的 LINE 群組（透過區網內執行 LINE 桌面版的轉發電腦）。同一車號在冷卻時間內只通知一次。</div>
+        <div class="lw-field">
+          <label class="lw-switch"><input type="checkbox" id="lwEnabled"> 啟用 LINE 通知</label>
+          <span style="flex:1"></span>
+          <span class="muted">同車號冷卻</span>
+          <input type="number" id="lwCooldown" min="0" max="168" step="0.5" style="width:80px" aria-label="冷卻小時">
+          <span class="muted">小時</span>
+        </div>
+        <div class="lw-field">
+          <span class="muted">轉發服務</span>
+          <input type="text" id="lwRelay" class="grow" placeholder="http://192.168.31.180:8098" autocomplete="off">
+          <input type="password" id="lwToken" style="width:150px" placeholder="金鑰（留空＝不變）" autocomplete="new-password">
+          <button class="btn" type="button" id="lwHealth">測試連線</button>
+        </div>
+        <div class="cam-section-title">監控車號（車號 → LINE 群組名稱）</div>
+        <div class="lw-rows" id="lwRows"></div>
+        <div><button class="btn" type="button" id="lwAdd">＋ 新增車號</button></div>
+        <div class="cam-section-title">最近通知</div>
+        <div class="lw-history" id="lwHistory"><span class="muted">尚無通知</span></div>
+        <div id="lwMsg" class="muted" style="font-size:13px;min-height:20px"></div>
+        <div class="modal-actions">
+          <button class="btn" id="lwCancel" type="button">取消</button>
+          <button class="btn" id="lwSave" type="button">儲存</button>
+        </div>
       </div>
     </div>
   </div>
@@ -832,6 +880,153 @@
       } catch (err) {
         e.target.value = previous;
         $('statusText').textContent = '貓咪門檻儲存失敗';
+      }
+    };
+
+    // ---- LINE plate watch ----
+    let lwLoaded = false;
+
+    function lwRowHtml(w) {
+      const meta = [];
+      if (w.last_sent_at) meta.push('上次通知 ' + fmtTime(w.last_sent_at));
+      if (w.next_allowed_at) meta.push('下次可通知 ' + fmtTime(w.next_allowed_at));
+      return '<div class="lw-row">' +
+        '<label class="lw-switch"><input type="checkbox" class="lw-on"' + (w.enabled ? ' checked' : '') + '> 啟用</label>' +
+        '<input type="text" class="plate lw-plate" maxlength="10" placeholder="ABC1234" value="' + esc(w.plate || '') + '">' +
+        '<span class="muted">→</span>' +
+        '<input type="text" class="chat lw-chat" maxlength="80" placeholder="LINE 群組名稱" value="' + esc(w.chat || '') + '">' +
+        '<button class="btn lw-test" type="button">測試</button>' +
+        '<button class="btn lw-del" type="button">刪除</button>' +
+        (meta.length ? '<div class="meta">' + esc(meta.join('　·　')) + '</div>' : '') +
+        '</div>';
+    }
+
+    function lwBindRows() {
+      document.querySelectorAll('#lwRows .lw-del').forEach((btn) => {
+        btn.onclick = () => { btn.closest('.lw-row').remove(); };
+      });
+      document.querySelectorAll('#lwRows .lw-test').forEach((btn) => {
+        btn.onclick = async () => {
+          const row = btn.closest('.lw-row');
+          const plate = row.querySelector('.lw-plate').value.trim();
+          if (!plate) { $('lwMsg').textContent = '請先填車號再測試'; return; }
+          $('lwMsg').textContent = '測試訊息送出中（會先儲存目前設定）…';
+          try {
+            await lwSave(true);
+            const r = await fetch('/api/line-watch/test', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({plate, with_snapshot: true}),
+            });
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.detail || 'test failed');
+            $('lwMsg').textContent = '已排入測試通知，請稍候查看 LINE 群組與「最近通知」。';
+            setTimeout(lwRefreshHistory, 12000);
+          } catch (e) {
+            $('lwMsg').textContent = '測試失敗：' + e.message;
+          }
+        };
+      });
+    }
+
+    function lwCollect() {
+      const watches = [];
+      document.querySelectorAll('#lwRows .lw-row').forEach((row) => {
+        const plate = row.querySelector('.lw-plate').value.trim();
+        const chat = row.querySelector('.lw-chat').value.trim();
+        if (!plate && !chat) return;
+        watches.push({plate, chat, enabled: row.querySelector('.lw-on').checked});
+      });
+      const payload = {
+        enabled: $('lwEnabled').checked,
+        relay_url: $('lwRelay').value.trim(),
+        cooldown_hours: Number($('lwCooldown').value || 3),
+        watches,
+      };
+      const token = $('lwToken').value.trim();
+      if (token) payload.token = token;
+      return payload;
+    }
+
+    async function lwSave(silent) {
+      const r = await fetch('/api/line-watch', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(lwCollect()),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'save failed');
+      lwRender(data);
+      if (!silent) $('lwMsg').textContent = '已儲存。';
+      return data;
+    }
+
+    function lwRender(data) {
+      $('lwEnabled').checked = !!data.enabled;
+      $('lwRelay').value = data.relay_url || '';
+      $('lwCooldown').value = data.cooldown_hours != null ? data.cooldown_hours : 3;
+      $('lwToken').value = '';
+      $('lwToken').placeholder = data.token_set ? '金鑰已設定（留空＝不變）' : '金鑰（選填）';
+      $('lwRows').innerHTML = (data.watches || []).map(lwRowHtml).join('') || '<span class="muted" style="font-size:13px">尚無監控車號，點下方「新增車號」。</span>';
+      lwBindRows();
+      lwRenderHistory(data.history || []);
+    }
+
+    function lwRenderHistory(history) {
+      if (!history.length) { $('lwHistory').innerHTML = '<span class="muted">尚無通知</span>'; return; }
+      $('lwHistory').innerHTML = history.slice().reverse().map((h) =>
+        '<div><span class="' + (h.ok ? 'ok' : 'fail') + '">' + (h.ok ? '✓ 已送出' : '✗ 失敗') + '</span> ' +
+        esc(fmtTime(h.ts)) + ' · ' + esc(fmtPlate(h.plate)) + ' → ' + esc(h.chat) +
+        (h.test ? '（測試）' : '') + (h.error ? ' · ' + esc(h.error) : '') + '</div>'
+      ).join('');
+    }
+
+    async function lwRefreshHistory() {
+      try {
+        const r = await fetch('/api/line-watch', { cache: 'no-store' });
+        if (r.ok) { const data = await r.json(); lwRenderHistory(data.history || []); }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function lwOpen() {
+      $('lwModal').classList.add('open');
+      $('lwMsg').textContent = '';
+      try {
+        const r = await fetch('/api/line-watch', { cache: 'no-store' });
+        if (!r.ok) throw new Error('load failed');
+        lwRender(await r.json());
+        lwLoaded = true;
+      } catch (e) {
+        $('lwMsg').textContent = '載入設定失敗';
+      }
+    }
+
+    function lwCloseFn() { $('lwModal').classList.remove('open'); }
+
+    $('lineWatchBtn').onclick = lwOpen;
+    $('lwClose').onclick = lwCloseFn;
+    $('lwCancel').onclick = lwCloseFn;
+    $('lwModal').onclick = (e) => { if (e.target === $('lwModal')) lwCloseFn(); };
+    $('lwAdd').onclick = () => {
+      if (!lwLoaded) return;
+      const holder = document.createElement('div');
+      holder.innerHTML = lwRowHtml({plate: '', chat: '', enabled: true});
+      const rows = $('lwRows');
+      if (!rows.querySelector('.lw-row')) rows.innerHTML = '';
+      rows.appendChild(holder.firstElementChild);
+      lwBindRows();
+      rows.lastElementChild.querySelector('.lw-plate').focus();
+    };
+    $('lwSave').onclick = async () => {
+      try { await lwSave(false); } catch (e) { $('lwMsg').textContent = '儲存失敗：' + e.message; }
+    };
+    $('lwHealth').onclick = async () => {
+      $('lwMsg').textContent = '檢查轉發服務中…';
+      try {
+        await lwSave(true);
+        const r = await fetch('/api/line-watch/relay-health', { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || 'unreachable');
+        $('lwMsg').textContent = '轉發服務正常' + (data.line_running ? '，LINE 執行中' : '，但 LINE 尚未執行') + (data.pending ? '，待送 ' + data.pending + ' 則' : '');
+      } catch (e) {
+        $('lwMsg').textContent = '轉發服務檢查失敗：' + e.message;
       }
     };
 

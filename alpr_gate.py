@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -67,6 +68,334 @@ def format_plate_display(value: str | None) -> str:
     plate = normalize_plate(value)
     match = re.fullmatch(r"([A-Z]{2,3})([0-9]{4})", plate)
     return f"{match.group(1)}-{match.group(2)}" if match else plate
+
+
+LINE_WATCH_DEFAULT_COOLDOWN_HOURS = 3.0
+LINE_WATCH_DIRECTION_LABELS = {
+    "enter": "進入",
+    "exit": "離開",
+    "pass": "經過",
+    "stop": "暫停",
+}
+
+
+class LineWatch:
+    """Watch specific plates and forward their snapshots to a LINE relay.
+
+    The relay (see scripts/line_relay.py) drives the desktop LINE app on a
+    Mac on the LAN and pastes the snapshot into the chosen group chat. Each
+    plate is notified at most once per cooldown window (default 3 hours);
+    the last-sent times live in a JSON file so restarts keep the promise.
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self.path = data_dir / "line_watch.json"
+        self.lock = threading.Lock()
+        self.queue: deque[dict[str, Any]] = deque()
+        self.worker: Optional[threading.Thread] = None
+        self.state: dict[str, Any] = {
+            "enabled": False,
+            "relay_url": "",
+            "token": "",
+            "cooldown_hours": LINE_WATCH_DEFAULT_COOLDOWN_HOURS,
+            "watches": [],
+            "last_sent": {},
+            "history": [],
+        }
+        try:
+            saved = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(saved, dict):
+                self.state["enabled"] = bool(saved.get("enabled"))
+                self.state["relay_url"] = str(saved.get("relay_url") or "").strip().rstrip("/")
+                self.state["token"] = str(saved.get("token") or "")
+                hours = safe_float(saved.get("cooldown_hours"), LINE_WATCH_DEFAULT_COOLDOWN_HOURS)
+                self.state["cooldown_hours"] = max(0.0, min(168.0, hours))
+                watches = []
+                for item in saved.get("watches") or []:
+                    entry = self._clean_watch(item)
+                    if entry:
+                        watches.append(entry)
+                self.state["watches"] = watches
+                last_sent = saved.get("last_sent")
+                if isinstance(last_sent, dict):
+                    self.state["last_sent"] = {
+                        normalize_plate(k): safe_float(v, 0.0) for k, v in last_sent.items() if normalize_plate(k)
+                    }
+                history = saved.get("history")
+                if isinstance(history, list):
+                    self.state["history"] = history[-50:]
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            LOG.warning("line watch state unreadable, starting fresh: %s", exc)
+
+    @staticmethod
+    def _clean_watch(item: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(item, dict):
+            return None
+        plate = normalize_plate(str(item.get("plate") or ""))
+        chat = str(item.get("chat") or "").strip()
+        if not re.fullmatch(r"[A-Z0-9]{4,10}", plate) or not chat:
+            return None
+        return {
+            "plate": plate,
+            "chat": chat[:80],
+            "enabled": bool(item.get("enabled", True)),
+            "note": str(item.get("note") or "").strip()[:80],
+        }
+
+    def _save_locked(self) -> None:
+        try:
+            tmp = self.path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self.path)
+        except Exception as exc:
+            LOG.warning("could not persist line watch state: %s", exc)
+
+    def start(self) -> None:
+        if self.worker is None or not self.worker.is_alive():
+            self.worker = threading.Thread(target=self._run, name="line-watch", daemon=True)
+            self.worker.start()
+
+    def settings(self) -> dict[str, Any]:
+        """Config for the API/UI; never exposes the shared token."""
+        with self.lock:
+            now = time.time()
+            cooldown = float(self.state["cooldown_hours"]) * 3600.0
+            watches = []
+            for entry in self.state["watches"]:
+                item = dict(entry)
+                last = float(self.state["last_sent"].get(entry["plate"]) or 0.0)
+                item["last_sent_at"] = datetime.fromtimestamp(last).astimezone().isoformat(timespec="seconds") if last else None
+                item["next_allowed_at"] = (
+                    datetime.fromtimestamp(last + cooldown).astimezone().isoformat(timespec="seconds")
+                    if last and cooldown > 0 else None
+                )
+                watches.append(item)
+            return {
+                "enabled": bool(self.state["enabled"]),
+                "relay_url": self.state["relay_url"],
+                "token_set": bool(self.state["token"]),
+                "cooldown_hours": self.state["cooldown_hours"],
+                "watches": watches,
+                "pending": len(self.queue),
+                "history": list(self.state["history"][-20:]),
+            }
+
+    def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            if "enabled" in payload:
+                self.state["enabled"] = bool(payload.get("enabled"))
+            if "relay_url" in payload:
+                url = str(payload.get("relay_url") or "").strip().rstrip("/")
+                if url and not re.match(r"^https?://", url):
+                    raise ValueError("轉發服務網址必須是 http:// 或 https://")
+                self.state["relay_url"] = url
+            if "token" in payload:
+                token = str(payload.get("token") or "").strip()
+                if token:
+                    self.state["token"] = token
+            if "cooldown_hours" in payload:
+                hours = safe_float(payload.get("cooldown_hours"), -1.0)
+                if hours < 0 or hours > 168:
+                    raise ValueError("冷卻時間需介於 0 到 168 小時")
+                self.state["cooldown_hours"] = round(hours, 2)
+            if "watches" in payload:
+                raw = payload.get("watches")
+                if not isinstance(raw, list):
+                    raise ValueError("watches 必須是清單")
+                cleaned: list[dict[str, Any]] = []
+                seen: set[str] = set()
+                for item in raw:
+                    entry = self._clean_watch(item)
+                    if entry is None:
+                        raise ValueError("車號需為 4–10 碼英數字，且必須填写 LINE 群組名稱")
+                    if entry["plate"] in seen:
+                        raise ValueError("車號重複：" + format_plate_display(entry["plate"]))
+                    seen.add(entry["plate"])
+                    cleaned.append(entry)
+                self.state["watches"] = cleaned
+            self._save_locked()
+        return self.settings()
+
+    def watch_due(self, plate: str) -> bool:
+        """True when this plate has an enabled watch outside its cooldown.
+
+        Used by the tracker so a watched plate is still recorded (and thus
+        notified) even when general activity recording is set to crossings.
+        """
+        key = normalize_plate(plate)
+        if not key:
+            return False
+        with self.lock:
+            if not self.state["enabled"]:
+                return False
+            if not any(w["enabled"] and w["plate"] == key for w in self.state["watches"]):
+                return False
+            cooldown = float(self.state["cooldown_hours"]) * 3600.0
+            last = float(self.state["last_sent"].get(key) or 0.0)
+            return (time.time() - last) >= cooldown
+
+    def maybe_notify(self, plate: str, direction: str, confidence: float, camera_label: str, snapshot: Optional[Path]) -> None:
+        key = normalize_plate(plate)
+        if direction not in LINE_WATCH_DIRECTION_LABELS or not key:
+            return
+        with self.lock:
+            if not self.state["enabled"] or not self.state["watches"]:
+                return
+            matches = [w for w in self.state["watches"] if w["enabled"] and w["plate"] == key]
+            if not matches:
+                return
+            cooldown = float(self.state["cooldown_hours"]) * 3600.0
+            now = time.time()
+            last = float(self.state["last_sent"].get(key) or 0.0)
+            if now - last < cooldown:
+                LOG.info("line watch %s skipped (cooldown %.1fh)", key, cooldown / 3600.0)
+                return
+            # Claim the window now so a burst of events sends one message.
+            self.state["last_sent"][key] = now
+            self._save_locked()
+            image_b64 = ""
+            if snapshot is not None:
+                try:
+                    import base64
+                    image_b64 = base64.b64encode(snapshot.read_bytes()).decode("ascii")
+                except Exception as exc:
+                    LOG.warning("line watch could not read snapshot: %s", exc)
+            text = (
+                f"🚗 監控車牌 {format_plate_display(key)} {LINE_WATCH_DIRECTION_LABELS[direction]}\n"
+                f"鏡頭：{camera_label}\n"
+                f"時間：{now_local().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"信心：{confidence:.2f}"
+            )
+            for watch in matches:
+                self.queue.append({
+                    "id": uuid.uuid4().hex[:12],
+                    "plate": key,
+                    "chat": watch["chat"],
+                    "text": text,
+                    "image_b64": image_b64,
+                    "attempts": 0,
+                    "next_try": 0.0,
+                    "created": now,
+                    "last_error": "",
+                })
+        LOG.info("line watch queued %s -> %s", key, ", ".join(w["chat"] for w in matches))
+
+    def test_notify(self, plate: str, snapshot: Optional[Path] = None) -> dict[str, Any]:
+        """Queue a test message, bypassing the cooldown."""
+        key = normalize_plate(plate)
+        with self.lock:
+            matches = [w for w in self.state["watches"] if w["plate"] == key]
+            if not matches:
+                raise ValueError("找不到這個車號的監控規則")
+            if not self.state["relay_url"]:
+                raise ValueError("尚未設定轉發服務網址")
+            image_b64 = ""
+            if snapshot is not None and snapshot.is_file():
+                import base64
+                image_b64 = base64.b64encode(snapshot.read_bytes()).decode("ascii")
+            text = (
+                f"✅ ALPR LINE 通知測試\n"
+                f"監控車牌：{format_plate_display(key)}\n"
+                f"時間：{now_local().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            job_ids = []
+            for watch in matches:
+                job_id = uuid.uuid4().hex[:12]
+                job_ids.append(job_id)
+                self.queue.append({
+                    "id": job_id,
+                    "plate": key,
+                    "chat": watch["chat"],
+                    "text": text,
+                    "image_b64": image_b64,
+                    "attempts": 0,
+                    "next_try": 0.0,
+                    "created": time.time(),
+                    "last_error": "",
+                    "test": True,
+                })
+        return {"queued": len(job_ids), "jobs": job_ids}
+
+    def _record_history(self, job: dict[str, Any], ok: bool, error: str) -> None:
+        entry = {
+            "ts": iso_now(),
+            "plate": job["plate"],
+            "chat": job["chat"],
+            "ok": ok,
+            "error": error[:200],
+            "test": bool(job.get("test")),
+        }
+        with self.lock:
+            self.state["history"] = (self.state["history"] + [entry])[-50:]
+            if not ok and not job.get("test"):
+                # Failed delivery should not silence the plate for 3 hours.
+                last = float(self.state["last_sent"].get(job["plate"]) or 0.0)
+                if abs(last - job["created"]) < 1.0:
+                    self.state["last_sent"].pop(job["plate"], None)
+            self._save_locked()
+
+    def _deliver(self, job: dict[str, Any]) -> tuple[bool, str]:
+        with self.lock:
+            relay_url = self.state["relay_url"]
+            token = self.state["token"]
+        if not relay_url:
+            return False, "尚未設定轉發服務網址"
+        body = json.dumps({
+            "chat": job["chat"],
+            "text": job["text"],
+            "image_b64": job["image_b64"],
+        }, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["X-Relay-Token"] = token
+        req = urllib.request.Request(relay_url + "/notify", data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if data.get("ok"):
+                return True, ""
+            return False, str(data.get("error") or "relay rejected")
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = json.loads(exc.read().decode("utf-8")).get("detail") or ""
+            except Exception:
+                detail = ""
+            # osascript noise can be huge; the useful part is at the end.
+            detail = str(detail)[-200:]
+            return False, f"HTTP {exc.code} {detail}".strip()
+        except Exception as exc:
+            return False, str(exc)[-200:]
+
+    def _run(self) -> None:
+        while True:
+            job = None
+            now = time.time()
+            with self.lock:
+                for candidate in self.queue:
+                    if candidate["next_try"] <= now:
+                        job = candidate
+                        self.queue.remove(candidate)
+                        break
+            if job is None:
+                time.sleep(1.0)
+                continue
+            ok, error = self._deliver(job)
+            if ok:
+                LOG.info("line watch delivered %s -> %s", job["plate"], job["chat"])
+                self._record_history(job, True, "")
+                continue
+            job["attempts"] += 1
+            job["last_error"] = error
+            if job["attempts"] >= 4 or time.time() - job["created"] > 1800:
+                LOG.error("line watch giving up %s -> %s: %s", job["plate"], job["chat"], error)
+                self._record_history(job, False, error)
+            else:
+                job["next_try"] = time.time() + 30.0 * job["attempts"]
+                LOG.warning("line watch attempt %s failed (%s), retrying", job["attempts"], error)
+                with self.lock:
+                    self.queue.append(job)
 
 
 def plate_is_dark(crop: np.ndarray, box: Any) -> bool:
@@ -1075,12 +1404,14 @@ class Tracker:
         on_event,
         record_mode: Optional[Callable[[], str]] = None,
         on_unknown: Optional[Callable[[str, "Track", np.ndarray], None]] = None,
+        watch_check: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.cfg = cfg
         self.plate_cfg = plate_cfg
         self.on_event = on_event
         self.record_mode = record_mode
         self.on_unknown = on_unknown
+        self.watch_check = watch_check
         self.tracks: dict[int, Track] = {}
         self.next_id = 1
         self.last_gate_event: dict[str, float] = {}
@@ -1163,6 +1494,8 @@ class Tracker:
                     crossed = self._slow_crossing(track)
                     if crossed and crossed not in track.gate_sent and self._claim_gate(best, crossed, now):
                         track.gate_sent.add(crossed)
+                        track.activity_sent = True
+                        self._mark_visit_activity(best, now)
                         LOG.info("track %s logged as %s after leaving the view", track.id, crossed)
                         self.on_event(best, crossed, track.confidence.get(best, 0.0), track, frame)
             # A confirmed plate that never crossed the gate line is still worth
@@ -1174,10 +1507,15 @@ class Tracker:
                 and len(track.gate_sent) < 2
                 and idle >= 2.5
                 and track.votes
-                and self._records_activity()
             ):
                 best, count = track.votes.most_common(1)[0]
-                if count >= self.cfg.votes and best and self._allowed(best) and self._log_activity(best):
+                if (
+                    count >= self.cfg.votes
+                    and best
+                    and self._allowed(best)
+                    and self._records_plate(best)
+                    and self._log_activity(best)
+                ):
                     direction = self._classify(track)
                     track.activity_sent = True
                     LOG.info("track %s logged as %s without a gate crossing", track.id, direction)
@@ -1234,6 +1572,15 @@ class Tracker:
             mode = "all"
         return mode != "crossing"
 
+    def _records_plate(self, plate: str) -> bool:
+        """Activity mode, or a plate whose LINE watch is currently due."""
+        if self._records_activity():
+            return True
+        try:
+            return bool(self.watch_check and self.watch_check(plate))
+        except Exception:
+            return False
+
     def _claim_gate(self, plate: str, direction: str, now: float) -> bool:
         key = f"{plate}:{direction}"
         last = self.last_gate_event.get(key)
@@ -1259,6 +1606,11 @@ class Tracker:
             return False
         visit["activity"] = True
         return True
+
+    def _mark_visit_activity(self, plate: str, now: float) -> None:
+        """A gate event already records this visit; skip a later pass/stop row."""
+        self._touch_visit(plate, now)
+        self.visits[plate]["activity"] = True
 
     def _update_track(
         self,
@@ -1310,6 +1662,8 @@ class Tracker:
             if count >= self.cfg.votes and best:
                 if self._allowed(best) and track.pending not in track.gate_sent and self._claim_gate(best, track.pending, now):
                     track.gate_sent.add(track.pending)
+                    track.activity_sent = True
+                    self._mark_visit_activity(best, now)
                     self.on_event(best, track.pending, track.confidence.get(best, 0.0), track, frame)
                 track.pending = None
             elif now - track.pending_at >= self.cfg.pending_timeout:
@@ -1326,7 +1680,6 @@ class Tracker:
         if (
             not track.pending
             and not track.activity_sent
-            and self._records_activity()
             and now - track.first_seen >= 3.0
             and len(track.votes) > 0
         ):
@@ -1336,7 +1689,12 @@ class Tracker:
             wide_spread = (max(wide) - min(wide)) if len(wide) >= 2 else 10_000.0
             if min(dense_spread, wide_spread) <= 20:
                 best, count = track.votes.most_common(1)[0]
-                if count >= self.cfg.votes and self._allowed(best) and self._log_activity(best):
+                if (
+                    count >= self.cfg.votes
+                    and self._allowed(best)
+                    and self._records_plate(best)
+                    and self._log_activity(best)
+                ):
                     track.activity_sent = True
                     LOG.info("track %s is parked and stays visible", track.id)
                     self.on_event(best, "stop", track.confidence.get(best, 0.0), track, frame)
@@ -1474,6 +1832,7 @@ class Service:
             self.webhook_url = str(integration.get("webhook_url") or "")
         except Exception:
             pass
+        self.line_watch = LineWatch(self.data_dir)
         self.roi_path = self.data_dir / "roi.json"
         try:
             roi_state = json.loads(self.roi_path.read_text())
@@ -1563,8 +1922,9 @@ class Service:
 
     def start(self) -> None:
         self._load_models()
-        self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
+        self.tracker = self._new_tracker()
         self.capture.start()
+        self.line_watch.start()
         self.thread = threading.Thread(target=self._run, name="alpr-worker", daemon=True)
         self.thread.start()
         self.sync_sentinels()
@@ -1576,6 +1936,16 @@ class Service:
             self.gate_cfg.line_y,
             sorted(self.cfg.plates.allow) or "all",
             "configured" if self.cfg.ha.webhook_url and not self.dry_run else "dry-run",
+        )
+
+    def _new_tracker(self) -> Tracker:
+        return Tracker(
+            self.gate_cfg,
+            self.cfg.plates,
+            self._on_event,
+            lambda: self.record_mode,
+            self._on_unknown,
+            watch_check=self.line_watch.watch_due,
         )
 
     def _gate_for(self, profile: CameraProfile) -> GateCfg:
@@ -1825,7 +2195,7 @@ class Service:
             self.gate_cfg = self._gate_for(self.profile)
             self.capture = Capture(self.camera_cfg)
             self.motion = MotionGate(self.cfg.motion)
-            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
+            self.tracker = self._new_tracker()
             with self.lock:
                 self.status.update(
                     {
@@ -1867,7 +2237,7 @@ class Service:
                 self.profile = profile
                 self.gate_cfg = self._gate_for(profile)
                 self.motion = MotionGate(self.cfg.motion)
-                self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
+                self.tracker = self._new_tracker()
         LOG.info("roi for %s set to %s", camera_id, parsed)
         return True
 
@@ -1889,7 +2259,7 @@ class Service:
                 self.profile = profile
                 self.gate_cfg = self._gate_for(profile)
                 self.motion = MotionGate(self.cfg.motion)
-                self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
+                self.tracker = self._new_tracker()
         LOG.info("gate for %s line_y=%s enter=%s", camera_id, profile.line_y, profile.enter_direction)
         return True
 
@@ -1983,7 +2353,7 @@ class Service:
 
     def _process(self, frame: np.ndarray, now: float) -> None:
         if self.tracker is None:
-            self.tracker = Tracker(self.gate_cfg, self.cfg.plates, self._on_event, lambda: self.record_mode, self._on_unknown)
+            self.tracker = self._new_tracker()
         detections = self.vehicle_detector.predict(frame)
         vehicles: list[tuple[float, tuple[int, int, int, int], Any]] = []
         height, width = frame.shape[:2]
@@ -2106,6 +2476,10 @@ class Service:
         self.store.add(seen_at, plate, direction, confidence, snapshot.name if snapshot else "", payload)
         LOG.info("event %s %s conf=%.3f track=%s", direction, plate, confidence, track.id)
         self._post_webhook(payload)
+        try:
+            self.line_watch.maybe_notify(plate, direction, confidence, self.profile.label, snapshot)
+        except Exception as exc:
+            LOG.warning("line watch notify failed: %s", exc)
 
     def _on_unknown(self, direction: str, track: Track, frame: np.ndarray) -> None:
         """Record a gate crossing whose plate was never confirmed."""
@@ -2582,6 +2956,49 @@ def create_app(service: Service) -> FastAPI:
         svc: Service = request.app.state.service
         svc.set_webhook_url("")
         return {"ok": True, "configured": False}
+
+    @app.get("/api/line-watch")
+    def get_line_watch(request: Request):
+        svc: Service = request.app.state.service
+        return svc.line_watch.settings()
+
+    @app.post("/api/line-watch")
+    def save_line_watch(payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        try:
+            return svc.line_watch.save_settings(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/line-watch/test")
+    def test_line_watch(payload: dict[str, Any], request: Request):
+        svc: Service = request.app.state.service
+        plate = normalize_plate(str(payload.get("plate") or ""))
+        if not plate:
+            raise HTTPException(status_code=400, detail="missing plate")
+        snapshot = svc.last_snapshot_path if payload.get("with_snapshot") else None
+        try:
+            return svc.line_watch.test_notify(plate, snapshot)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/line-watch/relay-health")
+    def line_watch_relay_health(request: Request):
+        svc: Service = request.app.state.service
+        settings = svc.line_watch.settings()
+        url = settings["relay_url"]
+        if not url:
+            raise HTTPException(status_code=400, detail="尚未設定轉發服務網址")
+        headers = {}
+        token = svc.line_watch.state.get("token")
+        if token:
+            headers["X-Relay-Token"] = token
+        req = urllib.request.Request(url + "/health", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"轉發服務無法連線：{exc}") from exc
 
     @app.get("/api/events")
     async def events(
