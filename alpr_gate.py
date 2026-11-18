@@ -1372,6 +1372,11 @@ class Track:
     first_seen: float
     last_seen: float
     ground: float
+    # JPEG of the frame that produced the best plate read so far, plus the
+    # vehicle box in that frame. Events that fire after the car has left the
+    # view still get a snapshot where the plate is actually visible.
+    shot: Optional[bytes] = None
+    shot_bbox: Optional[tuple[int, int, int, int]] = None
     history: deque[tuple[float, float]] = field(default_factory=deque)
     votes: Counter[str] = field(default_factory=Counter)
     confidence: dict[str, float] = field(default_factory=dict)
@@ -1633,7 +1638,13 @@ class Tracker:
 
         if plate:
             track.votes[plate] += 1
-            track.confidence[plate] = max(track.confidence.get(plate, 0.0), conf)
+            best_conf = track.confidence.get(plate, 0.0)
+            if conf > best_conf:
+                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                if ok and len(buf) < 4 * 1024 * 1024:
+                    track.shot = buf.tobytes()
+                    track.shot_bbox = tuple(int(v) for v in box)
+            track.confidence[plate] = max(best_conf, conf)
             self._touch_visit(plate, now)
 
         if now - track.first_seen >= self.cfg.min_track_seconds:
@@ -2641,8 +2652,16 @@ class Service:
             ts = now_local().strftime("%Y%m%d-%H%M%S")
             name = f"{ts}-{track.id}-{plate}-{direction}.jpg"
             path = self.snapshot_dir / name
-            image = frame.copy()
             x1, y1, x2, y2 = track.bbox
+            image = frame.copy()
+            if track.shot and track.shot_bbox:
+                decoded = cv2.imdecode(np.frombuffer(track.shot, np.uint8), cv2.IMREAD_COLOR)
+                if decoded is not None:
+                    image = decoded
+                    x1, y1, x2, y2 = track.shot_bbox
+            height, width = image.shape[:2]
+            x1, x2 = max(0, min(width - 1, x1)), max(0, min(width - 1, x2))
+            y1, y2 = max(0, min(height - 1, y1)), max(0, min(height - 1, y2))
             color = {
                 "enter": (0, 200, 0),
                 "exit": (0, 140, 255),
