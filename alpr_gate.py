@@ -1377,6 +1377,7 @@ class Track:
     # view still get a snapshot where the plate is actually visible.
     shot: Optional[bytes] = None
     shot_bbox: Optional[tuple[int, int, int, int]] = None
+    shot_at: float = 0.0
     history: deque[tuple[float, float]] = field(default_factory=deque)
     votes: Counter[str] = field(default_factory=Counter)
     confidence: dict[str, float] = field(default_factory=dict)
@@ -1644,8 +1645,17 @@ class Tracker:
                 if ok and len(buf) < 4 * 1024 * 1024:
                     track.shot = buf.tobytes()
                     track.shot_bbox = tuple(int(v) for v in box)
+                    track.shot_at = now
             track.confidence[plate] = max(best_conf, conf)
             self._touch_visit(plate, now)
+        elif now - track.shot_at > 1.5:
+            # No plate yet: keep the most recent frame that still shows the
+            # car so an UNKNOWN event is not saved as an empty street.
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+            if ok and len(buf) < 4 * 1024 * 1024:
+                track.shot = buf.tobytes()
+                track.shot_bbox = tuple(int(v) for v in box)
+                track.shot_at = now
 
         if now - track.first_seen >= self.cfg.min_track_seconds:
             high = self.cfg.line_y + self.cfg.margin
