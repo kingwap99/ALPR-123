@@ -71,6 +71,9 @@ def format_plate_display(value: str | None) -> str:
 
 
 LINE_WATCH_DEFAULT_COOLDOWN_HOURS = 3.0
+# How long a delivery may wait for the relay before it is dropped. A LAN
+# outage or a sleeping Mac is normal here, so keep trying for a long time.
+PENDING_MAX_AGE = 12 * 3600.0
 LINE_WATCH_DIRECTION_LABELS = {
     "enter": "進入",
     "exit": "離開",
@@ -101,6 +104,8 @@ class LineWatch:
             "watches": [],
             "last_sent": {},
             "history": [],
+            # Deliveries waiting for the relay to become reachable again.
+            "pending": [],
         }
         try:
             saved = json.loads(self.path.read_text(encoding="utf-8"))
@@ -124,6 +129,32 @@ class LineWatch:
                 history = saved.get("history")
                 if isinstance(history, list):
                     self.state["history"] = history[-50:]
+                pending = saved.get("pending")
+                if isinstance(pending, list):
+                    now = time.time()
+                    for item in pending[-20:]:
+                        if not isinstance(item, dict):
+                            continue
+                        plate = normalize_plate(str(item.get("plate") or ""))
+                        chat = str(item.get("chat") or "").strip()
+                        text = str(item.get("text") or "")
+                        if not plate or not chat or not text:
+                            continue
+                        if now - safe_float(item.get("created"), 0.0) > PENDING_MAX_AGE:
+                            continue
+                        self.queue.append({
+                            "id": str(item.get("id") or uuid.uuid4().hex[:12]),
+                            "plate": plate,
+                            "chat": chat[:80],
+                            "text": text,
+                            "image_b64": str(item.get("image_b64") or "")[:12 * 1024 * 1024],
+                            "attempts": int(safe_float(item.get("attempts"), 0.0)),
+                            "next_try": 0.0,
+                            "created": safe_float(item.get("created"), now),
+                            "last_error": "",
+                        })
+                    if self.queue:
+                        LOG.info("line watch restored %d pending deliveries", len(self.queue))
         except FileNotFoundError:
             pass
         except Exception as exc:
@@ -145,6 +176,20 @@ class LineWatch:
         }
 
     def _save_locked(self) -> None:
+        # Keep undelivered messages across restarts: the relay lives on another
+        # Mac that may be off, asleep or off the network for hours.
+        self.state["pending"] = [
+            {
+                "id": job["id"],
+                "plate": job["plate"],
+                "chat": job["chat"],
+                "text": job["text"],
+                "image_b64": job["image_b64"],
+                "attempts": job["attempts"],
+                "created": job["created"],
+            }
+            for job in list(self.queue)[-20:]
+        ]
         try:
             tmp = self.path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -254,7 +299,6 @@ class LineWatch:
                 return
             # Claim the window now so a burst of events sends one message.
             self.state["last_sent"][key] = now
-            self._save_locked()
             image_b64 = ""
             if snapshot is not None:
                 try:
@@ -280,6 +324,9 @@ class LineWatch:
                     "created": now,
                     "last_error": "",
                 })
+            # Persist together with the queue so a restart keeps both the
+            # cooldown claim and the undelivered message.
+            self._save_locked()
         LOG.info("line watch queued %s -> %s", key, ", ".join(w["chat"] for w in matches))
 
     def test_notify(self, plate: str, snapshot: Optional[Path] = None) -> dict[str, Any]:
@@ -388,14 +435,25 @@ class LineWatch:
                 continue
             job["attempts"] += 1
             job["last_error"] = error
-            if job["attempts"] >= 4 or time.time() - job["created"] > 1800:
+            age = time.time() - job["created"]
+            if age > PENDING_MAX_AGE:
                 LOG.error("line watch giving up %s -> %s: %s", job["plate"], job["chat"], error)
                 self._record_history(job, False, error)
+                continue
+            # Back off up to a minute, but keep the job queued so a LAN outage
+            # or a sleeping relay Mac does not lose the notification.
+            delay = min(60.0, 15.0 * job["attempts"])
+            job["next_try"] = time.time() + delay
+            if job["attempts"] <= 4 or job["attempts"] % 10 == 0:
+                LOG.warning(
+                    "line watch attempt %s failed (%s), retrying in %.0fs",
+                    job["attempts"], error, delay,
+                )
             else:
-                job["next_try"] = time.time() + 30.0 * job["attempts"]
-                LOG.warning("line watch attempt %s failed (%s), retrying", job["attempts"], error)
-                with self.lock:
-                    self.queue.append(job)
+                LOG.debug("line watch still retrying %s: %s", job["plate"], error)
+            with self.lock:
+                self.queue.append(job)
+                self._save_locked()
 
 
 def plate_is_dark(crop: np.ndarray, box: Any) -> bool:
@@ -557,6 +615,37 @@ def snow_level(crop: np.ndarray) -> float:
 
 
 SNOW_THRESHOLD = 0.055
+
+
+def frame_corrupt(frame: np.ndarray, box: tuple[int, int, int, int]) -> bool:
+    """True when decoder damage covers the vehicle, so it must not be stored.
+
+    Corrupted H.264 frames show up as colour speckle and mosaic blocks. Saving
+    one produces a snapshot where the plate cannot be read even though the
+    OCR ran on a different, clean frame.
+    """
+    height, width = frame.shape[:2]
+    x1, y1 = max(0, int(box[0])), max(0, int(box[1]))
+    x2, y2 = min(width, int(box[2])), min(height, int(box[3]))
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return False
+    return snow_level(frame[y1:y2, x1:x2]) > SNOW_THRESHOLD
+
+
+def track_store_shot(
+    track: "Track",
+    frame: np.ndarray,
+    box: tuple[int, int, int, int],
+    now: float,
+    quality: int = 90,
+) -> None:
+    """Remember this frame as the best picture of the vehicle so far."""
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok or len(buf) >= 4 * 1024 * 1024:
+        return
+    track.shot = buf.tobytes()
+    track.shot_bbox = tuple(int(v) for v in box)
+    track.shot_at = now
 
 
 def cat_confirmed(state: Any, box: tuple[int, int, int, int], now: float) -> bool:
@@ -1640,22 +1729,18 @@ class Tracker:
         if plate:
             track.votes[plate] += 1
             best_conf = track.confidence.get(plate, 0.0)
-            if conf > best_conf:
-                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                if ok and len(buf) < 4 * 1024 * 1024:
-                    track.shot = buf.tobytes()
-                    track.shot_bbox = tuple(int(v) for v in box)
-                    track.shot_at = now
+            if conf > best_conf and not frame_corrupt(frame, box):
+                track_store_shot(track, frame, box, now)
             track.confidence[plate] = max(best_conf, conf)
             self._touch_visit(plate, now)
-        elif now - track.shot_at > 1.5:
-            # No plate yet: keep the most recent frame that still shows the
-            # car so an UNKNOWN event is not saved as an empty street.
-            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
-            if ok and len(buf) < 4 * 1024 * 1024:
-                track.shot = buf.tobytes()
-                track.shot_bbox = tuple(int(v) for v in box)
-                track.shot_at = now
+        # Keep the stored frame current: a parked car only yields plate reads in
+        # bursts, and the frame from the moment it drove in is often the blurry
+        # one. Refresh every ~1.5 s while a plate is known, every ~5 s before
+        # that, and never from a frame damaged by decoder errors.
+        stale_after = 1.5 if track.votes else 5.0
+        if now - track.shot_at >= stale_after and not frame_corrupt(frame, box):
+            track_store_shot(track, frame, box, now)
+
 
         if now - track.first_seen >= self.cfg.min_track_seconds:
             high = self.cfg.line_y + self.cfg.margin
